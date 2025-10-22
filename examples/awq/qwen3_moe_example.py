@@ -6,13 +6,13 @@ from llmcompressor.modifiers.awq import AWQModifier
 from llmcompressor.utils import dispatch_for_generation
 
 # Select model and load it.
-MODEL_ID = "Qwen/Qwen3-30B-A3B"
+MODEL_ID = "/workspace/lim42@xiaopeng.com/binary_data/pytorch_models/Qwen3-30B-A3B"
 
 model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype="auto")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 
 # Select calibration dataset.
-DATASET_ID = "HuggingFaceH4/ultrachat_200k"
+DATASET_ID = "/dataset/workspace/zhangl98/dataset/ultrachat_200k"
 DATASET_SPLIT = "train_sft"
 
 # Select number of samples. 256 samples is a good place to start.
@@ -52,7 +52,7 @@ def tokenize(sample):
 # NOTE: vllm currently does not support asym MoE, using symmetric here
 recipe = [
     AWQModifier(
-        ignore=["lm_head", "re:.*mlp.gate$", "re:.*mlp.shared_expert_gate$"],
+        ignore=["lm_head", "re:.*mlp.shared_expert_gate$"],
         scheme="W4A16",
         targets=["Linear"],
     ),
@@ -79,6 +79,32 @@ print(tokenizer.decode(output[0]))
 print("==========================================\n\n")
 
 # Save to disk compressed.
-SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-awq-sym"
+# SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-awq-sym2"
+from compressed_tensors.quantization import QuantizationStatus
+from compressed_tensors.utils.match import match_named_modules
+from tqdm import tqdm
+
+for prefix, module in tqdm(
+    match_named_modules(
+        model,
+        ["re:.*mlp.gate$"],
+        warn_on_fail=True,
+    ),
+    desc="Compressing model",
+):
+    try:
+        assert module.quantization_status == QuantizationStatus.FROZEN, (
+            f"{module.quantization_status}"
+        )
+    except:
+        print(f"Quantization status is not frozen for {module}")
+    delattr(module, "quantization_status")
+    delattr(module, "quantization_enabled")
+    delattr(module, "quantization_scheme")
+    # 删除scale和zero_point nn parameter，节省存储空间
+    for key in list(module._parameters.keys()):
+        if key.endswith("_scale") or key.endswith("_zero_point"):
+            delattr(module, key)
+SAVE_DIR = "/tmp/" + "awq-sym3-realq"
 model.save_pretrained(SAVE_DIR, save_compressed=True)
 tokenizer.save_pretrained(SAVE_DIR)

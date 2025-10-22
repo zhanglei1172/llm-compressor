@@ -157,6 +157,7 @@ class QuantizationMixin(HooksMixin):
 
         for _, module in match_named_modules(model, self.resolved_targets, self.ignore):
             reset_quantization_status(module)  # reset any previously applied qconfigs
+            print(f"Reset quantization status for {_}")
 
         apply_quantization_config(model, self.resolved_config)
 

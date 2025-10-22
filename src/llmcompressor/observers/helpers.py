@@ -11,7 +11,7 @@ from typing import Optional
 
 import torch
 from compressed_tensors.quantization import QuantizationArgs, QuantizationStrategy
-from compressed_tensors.quantization.utils import strategy_cdiv
+# from compressed_tensors.quantization.utils import strategy_cdiv
 
 __all__ = ["flatten_for_calibration"]
 

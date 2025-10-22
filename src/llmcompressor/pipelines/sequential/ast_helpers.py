@@ -4,7 +4,7 @@ import inspect
 import linecache
 import sys
 import textwrap
-from typing import List
+from typing import List, Any
 
 import torch
 
@@ -54,6 +54,7 @@ def autowrap_forward(module: torch.nn.Module, ignore: List[str]):
     namespace = defining_module.__dict__.copy()
     namespace.update({"torch.fx.wrap": torch.fx.wrap})
     namespace.update({"self": module})
+    namespace.update({"Any": Any})
 
     # autowrap untraceable code
     auto_wrapper = AutoWrapper(namespace, ignore)

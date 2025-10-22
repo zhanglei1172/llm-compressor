@@ -3,16 +3,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llmcompressor import oneshot
 from llmcompressor.modifiers.awq import AWQModifier
+from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.utils import dispatch_for_generation
 
 # Select model and load it.
-MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
+MODEL_ID = "/dataset/workspace/zhangl98/models/Meta-Llama-3-8B-Instruct/"
 
 model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype="auto")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 
 # Select calibration dataset.
-DATASET_ID = "HuggingFaceH4/ultrachat_200k"
+DATASET_ID = "/dataset/workspace/zhangl98/dataset/ultrachat_200k"
 DATASET_SPLIT = "train_sft"
 
 # Select number of samples. 256 samples is a good place to start.
@@ -47,11 +48,23 @@ def tokenize(sample):
         add_special_tokens=False,
     )
 
+config_groups = {
+    "group_0": {
+        "targets": ["Linear"],
+        "input_activations": None,
+        "output_activations": None,
+        "weights": {
+            "num_bits": 4,
+            "type": "int",
+            "strategy": "channel",
+            "dynamic": False,
+            "symmetric": False,
+        }
+    }
+}
 
 # Configure the quantization algorithm to run.
-recipe = [
-    AWQModifier(ignore=["lm_head"], scheme="W4A16_ASYM", targets=["Linear"]),
-]
+recipe = [AWQModifier(ignore=["lm_head"], config_groups=config_groups)]
 
 # Apply algorithms.
 oneshot(
@@ -74,6 +87,6 @@ print(tokenizer.decode(output[0]))
 print("==========================================\n\n")
 
 # Save to disk compressed.
-SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-awq-asym"
+SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + "-awq-asym-rescale"
 model.save_pretrained(SAVE_DIR, save_compressed=True)
 tokenizer.save_pretrained(SAVE_DIR)
