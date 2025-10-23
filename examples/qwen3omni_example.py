@@ -31,7 +31,12 @@ from llmcompressor.modifiers.awq.mappings import AWQ_MAPPING_REGISTRY, _moe_defa
 AWQ_MAPPING_REGISTRY["Qwen3OmniMoeForConditionalGeneration"] = _moe_default_mappings
 
 # Select model and load it.
-MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+pretrain = "origin"
+if pretrain == "ostq":
+
+    MODEL_ID = "/code/omni_ostq/transformed_model/"
+else:
+    MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
 
 
@@ -147,6 +152,9 @@ recipe = [
     ),
 ]
 
+recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
+flag = "gptq"
+
 original_init = SequentialTracer.__init__
 def my_init(
     self,
@@ -243,7 +251,7 @@ from tqdm import tqdm
 #     except:
 #         print(f"Quantization status is not frozen for {prefix}")
 
-SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + "awq-sym-realq-text_"
+SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"{pretrain}-{flag}-sym-com-text"
 # from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
 # modify_save_pretrained(model)
 # model.save_pretrained(SAVE_DIR, save_compressed=True)
