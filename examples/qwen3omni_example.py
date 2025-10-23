@@ -22,6 +22,7 @@ from compressed_tensors.quantization import (
     QuantizationScheme,
     QuantizationStrategy,
     QuantizationType,
+    forward_quantize,
 )
 from qwen_vl_utils import process_vision_info
 from qwen_omni_utils import process_mm_info
@@ -243,5 +244,29 @@ from tqdm import tqdm
 #         print(f"Quantization status is not frozen for {prefix}")
 
 SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + "awq-sym-realq-text_"
-model.save_pretrained(SAVE_DIR, save_compressed=True)
-processor.save_pretrained(SAVE_DIR)
+# from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
+# modify_save_pretrained(model)
+# model.save_pretrained(SAVE_DIR, save_compressed=True)
+# processor.save_pretrained(SAVE_DIR)
+
+# SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + "awq-sym-realq-audio"
+# model.save_pretrained(SAVE_DIR+"-trans") # trans
+# processor.save_pretrained(SAVE_DIR+"-trans")
+# modify_save_pretrained(model)
+for _, module in match_named_modules(model, recipe[0].resolved_targets, recipe[0].ignore):
+    if hasattr(module, "quantization_status"):
+        assert module.quantization_status == QuantizationStatus.FROZEN, (
+            f"{module.quantization_status}"
+        )
+        scheme = getattr(module, "quantization_scheme", None)
+        module.weight.data = forward_quantize(
+                module, module.weight, "weight", scheme.weights
+            )
+        delattr(module, "quantization_status")
+        delattr(module, "quantization_enabled")
+        delattr(module, "quantization_scheme")
+        for key in list(module._parameters.keys()):
+            if key.endswith("_scale") or key.endswith("_zero_point"):
+                delattr(module, key)
+model.save_pretrained(SAVE_DIR+"-fq")#, save_compressed=True) # fakequant
+processor.save_pretrained(SAVE_DIR+"-fq")
