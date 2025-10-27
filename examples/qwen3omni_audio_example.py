@@ -136,7 +136,9 @@ recipe = [
     ),
 ]
 recipe = "examples/qwen3_omni_configs/audio/gptq.yaml"
+recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
 flag = "gptq"
+flag = "awq"
 
 def my_wrap(self, feature_lens, input_features):
     aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
@@ -347,7 +349,7 @@ from llmcompressor.recipe import Recipe
 recipe = Recipe.create_instance(
                 path_or_modifiers=recipe, target_stage=None
             )
-for _, module in match_named_modules(model, recipe[0].resolved_targets, recipe[0].ignore):
+for _, module in match_named_modules(model, recipe.modifiers[0].resolved_targets, recipe.modifiers[0].ignore):
     if hasattr(module, "quantization_status"):
         assert module.quantization_status == QuantizationStatus.FROZEN, (
             f"{module.quantization_status}"

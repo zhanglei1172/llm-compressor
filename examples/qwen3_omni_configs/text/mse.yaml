@@ -2,9 +2,9 @@ quant_stage:
   quant_modifiers:
     # SmoothQuantModifier:
     #   smoothing_strength: 0.8
-    GPTQModifier:
+    QuantizationModifier:
       ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"]
-      actorder: null
+        
       config_groups:
         group_0:
           weights:

@@ -31,7 +31,7 @@ from llmcompressor.modifiers.awq.mappings import AWQ_MAPPING_REGISTRY, _moe_defa
 AWQ_MAPPING_REGISTRY["Qwen3OmniMoeForConditionalGeneration"] = _moe_default_mappings
 
 # Select model and load it.
-pretrain = "origin"
+pretrain = "ostq"
 if pretrain == "ostq":
 
     MODEL_ID = "/code/omni_ostq/transformed_model/"
@@ -152,8 +152,8 @@ recipe = [
     ),
 ]
 
-recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
-flag = "gptq"
+recipe = "examples/qwen3_omni_configs/text/mse.yaml"
+flag = "mse"
 
 original_init = SequentialTracer.__init__
 def my_init(
@@ -261,7 +261,11 @@ SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"{pretrain}-{flag}-s
 # model.save_pretrained(SAVE_DIR+"-trans") # trans
 # processor.save_pretrained(SAVE_DIR+"-trans")
 # modify_save_pretrained(model)
-for _, module in match_named_modules(model, recipe[0].resolved_targets, recipe[0].ignore):
+from llmcompressor.recipe import Recipe
+recipe = Recipe.create_instance(
+                path_or_modifiers=recipe, target_stage=None
+            )
+for _, module in match_named_modules(model, recipe.modifiers[0].resolved_targets, recipe.modifiers[0].ignore):
     if hasattr(module, "quantization_status"):
         assert module.quantization_status == QuantizationStatus.FROZEN, (
             f"{module.quantization_status}"

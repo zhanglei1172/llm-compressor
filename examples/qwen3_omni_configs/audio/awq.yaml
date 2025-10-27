@@ -2,9 +2,18 @@ quant_stage:
   quant_modifiers:
     # SmoothQuantModifier:
     #   smoothing_strength: 0.8
-    GPTQModifier:
-      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"]
-      actorder: null
+    AWQModifier:
+      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:conv.*", 're:proj[\d].*', "re:positional_embedding*"]
+      mappings:
+        -
+          smooth_layer: "re:.*self_attn_layer_norm$"
+          balance_layers: ["re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$"]
+        -
+          smooth_layer: "re:.*v_proj$"
+          balance_layers: ["re:.*out_proj$"]
+        - 
+          smooth_layer: "re:.*final_layer_norm$"
+          balance_layers: ["re:.*fc1$"]
       config_groups:
         group_0:
           weights:
