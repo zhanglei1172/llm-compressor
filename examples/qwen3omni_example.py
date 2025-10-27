@@ -30,14 +30,23 @@ from llmcompressor.modifiers.awq.mappings import AWQ_MAPPING_REGISTRY, _moe_defa
 
 AWQ_MAPPING_REGISTRY["Qwen3OmniMoeForConditionalGeneration"] = _moe_default_mappings
 
+#################### configurations ####################
+calibrate_moe_context = True
 # Select model and load it.
-pretrain = "ostq"
-if pretrain == "ostq":
+pretrain = "origin"
+recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
+flag = "gptq"
+#################### configurations ####################
+
+
+if pretrain == "origin":
 
     MODEL_ID = "/code/omni_ostq/transformed_model/"
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
+if calibrate_moe_context:
+    flag += "-calmoe"
 
 
 # Select calibration dataset.
@@ -132,28 +141,27 @@ def data_collator(batch):
 
 # Configure the quantization algorithm to run.
 # NOTE: vllm currently does not support asym MoE, using symmetric here
-recipe = [
-    AWQModifier(
-        ignore=["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"],
-        # scheme="W4A16",
-        config_groups={
-            "group_0": QuantizationScheme(
-                    targets=["Linear"],
-                    weights=QuantizationArgs(
-                        num_bits=4,
-                        type=QuantizationType.INT,
-                        strategy=QuantizationStrategy.CHANNEL,
-                        symmetric=True,
-                        dynamic=False,
-                    )
-                )
-        },
-        # targets=["Linear"],
-    ),
-]
+# recipe = [
+#     AWQModifier(
+#         ignore=["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"],
+#         # scheme="W4A16",
+#         config_groups={
+#             "group_0": QuantizationScheme(
+#                     targets=["Linear"],
+#                     weights=QuantizationArgs(
+#                         num_bits=4,
+#                         type=QuantizationType.INT,
+#                         strategy=QuantizationStrategy.CHANNEL,
+#                         symmetric=True,
+#                         dynamic=False,
+#                     )
+#                 )
+#         },
+#         # targets=["Linear"],
+#     ),
+# ]
 
-recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
-flag = "gptq"
+
 
 original_init = SequentialTracer.__init__
 def my_init(
@@ -185,7 +193,7 @@ with contextlib.ExitStack() as stack:
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
         num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        calibrate_moe_context=True,
+        calibrate_moe_context=calibrate_moe_context,
         sequential_targets=["Qwen3OmniMoeThinkerTextDecoderLayer"],
     )
 
@@ -251,7 +259,7 @@ from tqdm import tqdm
 #     except:
 #         print(f"Quantization status is not frozen for {prefix}")
 
-SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"{pretrain}-{flag}-sym-com-text"
+SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{pretrain}-{flag}-sym-com-text"
 # from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
 # modify_save_pretrained(model)
 # model.save_pretrained(SAVE_DIR, save_compressed=True)

@@ -7,6 +7,7 @@ from llmcompressor.modeling.llama4 import replace as replace_llama4
 from llmcompressor.modeling.qwen3_moe import replace as replace_Qwen3MoE
 from llmcompressor.modeling.qwen3_next_moe import replace as replace_Qwen3NextMoE
 from llmcompressor.modeling.qwen3_vl_moe import replace as replace_Qwen3VLMoE
+from llmcompressor.modeling.qwen3_omni_moe import replace as replace_Qwen3OmniMoE
 from llmcompressor.utils.helpers import patch_attr
 
 __all__ = ["replace_modules_for_calibration"]
@@ -77,9 +78,28 @@ def update_qwen3_next_moe(model, module, stack, calibrate_all_experts):
         )
 
 
+def update_qwen3_omni_moe(model, module, stack, calibrate_all_experts):
+    cls_name = module.__class__.__name__
+    if (
+        cls_name == "Qwen3OmniMoeThinkerTextSparseMoeBlock"
+        and module.experts.__class__.__name__ == "Qwen3OmniMoeThinkerTextExperts"
+    ):
+        stack.enter_context(
+            patch_attr(
+                module,
+                "experts",
+                replace_Qwen3OmniMoE(
+                    config=model.config,
+                    module=module.experts,
+                    calibrate_all_experts=calibrate_all_experts,
+                ),
+            )
+        )
+
 moe_context = {
     "Qwen3MoeForCausalLM": update_qwen3_moe,
     "Qwen3NextForCausalLM": update_qwen3_next_moe,
+    "Qwen3OmniMoeThinkerForConditionalGeneration": update_qwen3_omni_moe,
 }
 
 

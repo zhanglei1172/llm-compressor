@@ -25,6 +25,13 @@ from llmcompressor.modifiers.awq.mappings import AWQ_MAPPING_REGISTRY, _moe_defa
 
 AWQ_MAPPING_REGISTRY["Qwen3OmniMoeForConditionalGeneration"] = _moe_default_mappings
 
+#################### configurations ####################
+recipe = "examples/qwen3_omni_configs/audio/gptq.yaml"
+# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
+flag = "gptq"
+# flag = "awq"
+#################### configurations ####################
+
 # Select model and load it.
 MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
@@ -99,46 +106,43 @@ def data_collator(batch):
 
 # Configure the quantization algorithm to run.
 # NOTE: vllm currently does not support asym MoE, using symmetric here
-recipe = [
-    AWQModifier(
-        # ignore=["re:lm_head", "re:.*mlp.shared_expert_gate$", "re:visual.*", "re:model.visual.*", "re:model.layers.*"],
-        ignore=["re:lm_head", "re:visual.*", "re:model.visual.*"]+
-        ["re:conv.*", r"re:proj[\d].*", "re:positional_embedding*"],
-        # scheme="W4A16",
-        config_groups={
-            "group_0": QuantizationScheme(
-                    targets=["Linear"],
-                    weights=QuantizationArgs(
-                        num_bits=4,
-                        type=QuantizationType.INT,
-                        strategy=QuantizationStrategy.CHANNEL,
-                        symmetric=True,
-                        dynamic=False,
-                    )
-                )
-        },
-        mappings=[
-            AWQMapping(
-                "re:.*self_attn_layer_norm$",
-                ["re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$"],
-            ),
-            AWQMapping("re:.*v_proj$", ["re:.*out_proj$"]),
-            AWQMapping(
-                "re:.*final_layer_norm$",
-                ["re:.*fc1$"],
-            ),
-            # AWQMapping(
-            #     "re:.*up_proj$",
-            #     ["re:.*down_proj$"],
-            # ),
-        ],
-        # targets=["Linear"],
-    ),
-]
-recipe = "examples/qwen3_omni_configs/audio/gptq.yaml"
-# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
-flag = "gptq"
-# flag = "awq"
+# recipe = [
+#     AWQModifier(
+#         # ignore=["re:lm_head", "re:.*mlp.shared_expert_gate$", "re:visual.*", "re:model.visual.*", "re:model.layers.*"],
+#         ignore=["re:lm_head", "re:visual.*", "re:model.visual.*"]+
+#         ["re:conv.*", r"re:proj[\d].*", "re:positional_embedding*"],
+#         # scheme="W4A16",
+#         config_groups={
+#             "group_0": QuantizationScheme(
+#                     targets=["Linear"],
+#                     weights=QuantizationArgs(
+#                         num_bits=4,
+#                         type=QuantizationType.INT,
+#                         strategy=QuantizationStrategy.CHANNEL,
+#                         symmetric=True,
+#                         dynamic=False,
+#                     )
+#                 )
+#         },
+#         mappings=[
+#             AWQMapping(
+#                 "re:.*self_attn_layer_norm$",
+#                 ["re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$"],
+#             ),
+#             AWQMapping("re:.*v_proj$", ["re:.*out_proj$"]),
+#             AWQMapping(
+#                 "re:.*final_layer_norm$",
+#                 ["re:.*fc1$"],
+#             ),
+#             # AWQMapping(
+#             #     "re:.*up_proj$",
+#             #     ["re:.*down_proj$"],
+#             # ),
+#         ],
+#         # targets=["Linear"],
+#     ),
+# ]
+
 
 def my_wrap(self, feature_lens, input_features):
     aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
@@ -341,7 +345,7 @@ from tqdm import tqdm
 #         if key.endswith("_scale") or key.endswith("_zero_point"):
 #             delattr(module, key)
 
-SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"{flag}-sym-com-audio"
+SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{flag}-sym-com-audio"
 # model.save_pretrained(SAVE_DIR+"-trans") # trans
 # processor.save_pretrained(SAVE_DIR+"-trans")
 # modify_save_pretrained(model)
