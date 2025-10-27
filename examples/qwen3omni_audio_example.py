@@ -136,9 +136,9 @@ recipe = [
     ),
 ]
 recipe = "examples/qwen3_omni_configs/audio/gptq.yaml"
-recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
+# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
 flag = "gptq"
-flag = "awq"
+# flag = "awq"
 
 def my_wrap(self, feature_lens, input_features):
     aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
@@ -355,9 +355,18 @@ for _, module in match_named_modules(model, recipe.modifiers[0].resolved_targets
             f"{module.quantization_status}"
         )
         scheme = getattr(module, "quantization_scheme", None)
-        module.weight.data = forward_quantize(
+        if isinstance(module, torch.nn.Linear):
+            module.weight.data = forward_quantize(
+                    module, module.weight, "weight", scheme.weights
+                )
+        elif isinstance(module, torch.nn.Conv2d):
+            module.weight_scale.data = module.weight_scale.data.unsqueeze(-1).unsqueeze(-1)
+            module.weight_zero_point.data = module.weight_zero_point.data.unsqueeze(-1).unsqueeze(-1)
+            module.weight.data = forward_quantize(
                 module, module.weight, "weight", scheme.weights
             )
+        else:
+            raise NotImplementedError(f"Unsupported module type {type(module)}")
         delattr(module, "quantization_status")
         delattr(module, "quantization_enabled")
         delattr(module, "quantization_scheme")

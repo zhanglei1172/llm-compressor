@@ -152,8 +152,8 @@ recipe = [
     ),
 ]
 
-recipe = "examples/qwen3_omni_configs/text/mse.yaml"
-flag = "mse"
+recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
+flag = "gptq"
 
 original_init = SequentialTracer.__init__
 def my_init(
