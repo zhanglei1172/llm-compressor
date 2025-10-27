@@ -26,6 +26,8 @@ def make_empty_hessian(
     module: torch.nn.Module, device: Optional[torch.device] = None
 ) -> torch.Tensor:
     weight = module.weight
+    if isinstance(module, torch.nn.Conv2d):
+        weight = weight.flatten(1)
     num_columns = weight.shape[1]
     device = device if device is not None else weight.device
     return torch.zeros((num_columns, num_columns), device=device, dtype=GPTQ_PRECISION)
@@ -96,7 +98,8 @@ def quantize_weight(
 
     # create observer for calculating quantization parameters
     observer = Observer.load_from_registry(
-        "memoryless_minmax",
+        quant_args.observer,
+        # "memoryless_minmax",
         base_name="weight",
         args=quant_args,
         module=module,
