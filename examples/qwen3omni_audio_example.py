@@ -353,11 +353,14 @@ from llmcompressor.recipe import Recipe
 recipe = Recipe.create_instance(
                 path_or_modifiers=recipe, target_stage=None
             )
-for _, module in match_named_modules(model, recipe.modifiers[0].resolved_targets, recipe.modifiers[0].ignore):
+quantized_name_set = set()
+import re
+for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore):
     if hasattr(module, "quantization_status"):
         assert module.quantization_status == QuantizationStatus.FROZEN, (
             f"{module.quantization_status}"
         )
+        quantized_name_set.add(re.sub(r'\d+', 'X', _))
         scheme = getattr(module, "quantization_scheme", None)
         if isinstance(module, torch.nn.Linear):
             module.weight.data = forward_quantize(
@@ -377,5 +380,8 @@ for _, module in match_named_modules(model, recipe.modifiers[0].resolved_targets
         for key in list(module._parameters.keys()):
             if key.endswith("_scale") or key.endswith("_zero_point"):
                 delattr(module, key)
+print(f"Total quantized modules: {quantized_name_set}")
 model.save_pretrained(SAVE_DIR+"-fq")#, save_compressed=True) # fakequant
 processor.save_pretrained(SAVE_DIR+"-fq")
+
+print(SAVE_DIR+"-fq")

@@ -79,20 +79,17 @@ def update_qwen3_next_moe(model, module, stack, calibrate_all_experts):
 
 
 def update_qwen3_omni_moe(model, module, stack, calibrate_all_experts):
+    if not calibrate_all_experts:
+        return 
     cls_name = module.__class__.__name__
     if (
-        cls_name == "Qwen3OmniMoeThinkerTextSparseMoeBlock"
-        and module.experts.__class__.__name__ == "Qwen3OmniMoeThinkerTextExperts"
+        cls_name == "Qwen3OmniMoeThinkerTextExperts"
     ):
         stack.enter_context(
             patch_attr(
                 module,
-                "experts",
-                replace_Qwen3OmniMoE(
-                    config=model.config,
-                    module=module.experts,
-                    calibrate_all_experts=calibrate_all_experts,
-                ),
+                "forward",
+                replace_Qwen3OmniMoE().__get__(module, module.__class__),
             )
         )
 

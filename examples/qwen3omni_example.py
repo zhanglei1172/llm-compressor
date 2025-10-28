@@ -1,4 +1,5 @@
 from typing import Mapping, Optional, Union
+import copy
 from datasets import load_dataset, load_from_disk
 from accelerate.hooks import attach_align_device_hook
 from accelerate.hooks import remove_hook_from_module
@@ -26,20 +27,47 @@ from compressed_tensors.quantization import (
 )
 from qwen_vl_utils import process_vision_info
 from qwen_omni_utils import process_mm_info
-from llmcompressor.modifiers.awq.mappings import AWQ_MAPPING_REGISTRY, _moe_default_mappings
+from llmcompressor.modifiers.awq import mappings as awq_mappings
+from llmcompressor.modifiers.transform.spinquant import mappings
+from llmcompressor.modifiers.transform.spinquant import norm_mappings
 
-AWQ_MAPPING_REGISTRY["Qwen3OmniMoeForConditionalGeneration"] = _moe_default_mappings
+# awq_mappings.AWQ_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = awq_mappings._moe_default_mappings
+
+mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = mappings.SpinQuantMapping(
+    embedding="re:.*embed_tokens$",
+    attn_q="re:.*model.*q_proj$",
+    attn_k="re:.*model.*k_proj$",
+    attn_v="re:.*model.*v_proj$",
+    attn_o="re:.*model.*o_proj$",
+    mlp_in=[r"re:.*mlp\.gate$"] + [rf"re:.*model.*\.{i}\.{x}$" for x in ["up_proj", "gate_proj"] for i in range(128)],
+    mlp_out=[rf"re:.*model.*\.{i}\.down_proj$" for i in range(128)],
+    lm_head="lm_head",
+)
+norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = [
+    norm_mappings.NormMapping(
+        norm="re:.*model.*input_layernorm$",
+        linears=["re:.*model.*q_proj$", "re:.*model.*k_proj$", "re:.*model.*v_proj$"],
+    ),
+    norm_mappings.NormMapping(
+        norm="re:.*model.*post_attention_layernorm$",
+        linears=[r"re:.*mlp\.gate$"] + [rf"re:.*model.*\.{i}\.{x}$" for x in ["up_proj", "gate_proj"] for i in range(128)],
+    ),
+    norm_mappings.NormMapping(
+        norm="model.norm",
+        linears=["lm_head"],
+    ),
+]
 
 #################### configurations ####################
 calibrate_moe_context = True
 # Select model and load it.
 pretrain = "origin"
-recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
-flag = "gptq"
+recipe = "examples/qwen3_omni_configs/text/mse.yaml"
+flag = "mse"
 #################### configurations ####################
 
 
-if pretrain == "origin":
+if pretrain == "ostq":
 
     MODEL_ID = "/code/omni_ostq/transformed_model/"
 else:
@@ -179,9 +207,15 @@ def my_init(
     model.thinker.visual.pos_embed.to(device)
     self.offloaded.remove(model.thinker.visual.pos_embed)
 
+_tmp_config = copy.deepcopy(model.thinker.config)
+_tmp_config.update(model.thinker.config.text_config.to_dict())
+
 with contextlib.ExitStack() as stack:
     stack.enter_context(
         helpers.patch_attr(SequentialTracer, "__init__", my_init)
+    )
+    stack.enter_context(
+        helpers.patch_attr(model.thinker, "config", _tmp_config)
     )
     # Apply algorithms.
     oneshot(
@@ -273,11 +307,15 @@ from llmcompressor.recipe import Recipe
 recipe = Recipe.create_instance(
                 path_or_modifiers=recipe, target_stage=None
             )
-for _, module in match_named_modules(model, recipe.modifiers[0].resolved_targets, recipe.modifiers[0].ignore):
+
+quantized_name_set = set()
+import re
+for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore):
     if hasattr(module, "quantization_status"):
         assert module.quantization_status == QuantizationStatus.FROZEN, (
             f"{module.quantization_status}"
         )
+        quantized_name_set.add(re.sub(r'\d+', 'X', _))
         scheme = getattr(module, "quantization_scheme", None)
         module.weight.data = forward_quantize(
                 module, module.weight, "weight", scheme.weights
@@ -288,5 +326,8 @@ for _, module in match_named_modules(model, recipe.modifiers[0].resolved_targets
         for key in list(module._parameters.keys()):
             if key.endswith("_scale") or key.endswith("_zero_point"):
                 delattr(module, key)
+print(f"Total quantized modules: {quantized_name_set}")
 model.save_pretrained(SAVE_DIR+"-fq")#, save_compressed=True) # fakequant
 processor.save_pretrained(SAVE_DIR+"-fq")
+
+print(SAVE_DIR+"-fq")
