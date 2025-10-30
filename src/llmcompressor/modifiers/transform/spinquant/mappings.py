@@ -27,6 +27,8 @@ class SpinQuantMapping(BaseModel):
         consitute the output of the MLP block, usually down_proj
     """
 
+    mm_proj: List[str] = Field(default_factory=list)
+
     embedding: str
 
     attn_q: str
@@ -49,6 +51,7 @@ class SpinQuantMapping(BaseModel):
 
 
 _default_mappings = SpinQuantMapping(
+    mm_proj=[],
     embedding="re:.*embed_tokens$",
     attn_q="re:.*q_proj$",
     attn_k="re:.*k_proj$",

@@ -7,7 +7,7 @@ from compressed_tensors import (
     update_offload_parameter,
 )
 
-__all__ = ["center_embeddings", "fuse_norm_linears"]
+__all__ = ["center_embeddings", "fuse_norm_linears", "back_mean_into_fc"]
 
 
 PRECISION = torch.float64
@@ -29,6 +29,24 @@ def center_embeddings(embedding: torch.nn.Module):
         new_weight = new_weight.to(weight_dtype)
 
     update_offload_parameter(embedding, "weight", new_weight)
+
+def back_mean_into_fc(linear: torch.nn.Linear):
+    exec_device = get_execution_device(linear)
+    with align_module_device(
+        linear, exec_device
+    ):
+        weight_dtype = linear.weight.dtype
+        new_weight = linear.weight.to(PRECISION)
+        new_weight = new_weight - new_weight.mean(dim=-2, keepdim=True)
+        new_weight = new_weight.to(weight_dtype)
+        if hasattr(linear, 'bias') and linear.bias is not None:
+            new_bias = linear.bias.to(PRECISION)
+            new_bias = new_bias - new_bias.mean()
+            new_bias = new_bias.to(weight_dtype)
+
+    update_offload_parameter(linear, "weight", new_weight)
+    if hasattr(linear, 'bias') and linear.bias is not None:
+        update_offload_parameter(linear, "bias", new_bias)
 
 
 def fuse_norm_linears(norm: torch.nn.Module, linears: Iterable[torch.nn.Linear]):

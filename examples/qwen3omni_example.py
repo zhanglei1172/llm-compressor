@@ -34,6 +34,7 @@ from llmcompressor.modifiers.transform.spinquant import norm_mappings
 # awq_mappings.AWQ_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = awq_mappings._moe_default_mappings
 
 mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = mappings.SpinQuantMapping(
+    mm_proj=[r"re:.*audio_tower\.proj2$", r"re:.*visual\.merger.*mlp\.2$"],
     embedding="re:.*embed_tokens$",
     attn_q="re:.*model.*q_proj$",
     attn_k="re:.*model.*k_proj$",
@@ -64,6 +65,9 @@ calibrate_moe_context = True
 pretrain = "origin"
 recipe = "examples/qwen3_omni_configs/text/mse.yaml"
 flag = "mse"
+fq = True
+realq = False
+NUM_CALIBRATION_SAMPLES = 1
 #################### configurations ####################
 
 
@@ -83,7 +87,6 @@ if calibrate_moe_context:
 DATASET_ID = "lmms-lab/flickr30k"
 DATASET_SPLIT = "test[:512]"
 # DATASET_SPLIT = "test"
-NUM_CALIBRATION_SAMPLES = 512
 MAX_SEQUENCE_LENGTH = 2048
 # Select number of samples. 256 samples is a good place to start.
 # Increasing the number of samples can improve accuracy.
@@ -293,11 +296,14 @@ from tqdm import tqdm
 #     except:
 #         print(f"Quantization status is not frozen for {prefix}")
 
-SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{pretrain}-{flag}-sym-com-text"
-# from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
-# modify_save_pretrained(model)
-# model.save_pretrained(SAVE_DIR, save_compressed=True)
-# processor.save_pretrained(SAVE_DIR)
+SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{pretrain}-{flag}-sym-com-text" + ("-realq" if realq else ("-fq" if fq else "-trans"))
+from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
+if realq:
+    modify_save_pretrained(model)
+    model.save_pretrained(SAVE_DIR, save_compressed=True)
+    processor.save_pretrained(SAVE_DIR)
+    print(SAVE_DIR)
+    exit(0)
 
 # SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + "awq-sym-realq-audio"
 # model.save_pretrained(SAVE_DIR+"-trans") # trans
@@ -317,9 +323,10 @@ for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_target
         )
         quantized_name_set.add(re.sub(r'\d+', 'X', _))
         scheme = getattr(module, "quantization_scheme", None)
-        module.weight.data = forward_quantize(
-                module, module.weight, "weight", scheme.weights
-            )
+        if fq:
+            module.weight.data = forward_quantize(
+                    module, module.weight, "weight", scheme.weights
+                )
         delattr(module, "quantization_status")
         delattr(module, "quantization_enabled")
         delattr(module, "quantization_scheme")
@@ -327,7 +334,7 @@ for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_target
             if key.endswith("_scale") or key.endswith("_zero_point"):
                 delattr(module, key)
 print(f"Total quantized modules: {quantized_name_set}")
-model.save_pretrained(SAVE_DIR+"-fq")#, save_compressed=True) # fakequant
-processor.save_pretrained(SAVE_DIR+"-fq")
+model.save_pretrained(SAVE_DIR)#, save_compressed=True) # fakequant
+processor.save_pretrained(SAVE_DIR)
 
-print(SAVE_DIR+"-fq")
+print(SAVE_DIR)

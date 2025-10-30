@@ -14,7 +14,7 @@ from pydantic import Field, ValidationInfo, field_validator
 from transformers import PreTrainedModel
 
 from llmcompressor.core import Event, EventType, State
-from llmcompressor.modeling import center_embeddings, fuse_norm_linears
+from llmcompressor.modeling import center_embeddings, fuse_norm_linears, back_mean_into_fc
 from llmcompressor.modifiers import Modifier
 
 from .mappings import SpinQuantMapping, infer_mapping_from_model
@@ -82,6 +82,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
     :param transform_config: Optional transform config for overriding provided arguments
     """
 
+    backe_mean: bool = Field(default=False)
     rotations: List[SpinquantRotation] = Field(default_factory=lambda: ["R1", "R2"])
     transform_type: Literal["hadamard", "random-hadamard", "random-matrix"] = Field(
         default="hadamard"
@@ -150,7 +151,9 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
 
         # needs to happen after the model has been hooked to execute on the GPU
         # otherwise we're applying weight transforms on CPU
-        self._center_embeddings(state.model)
+        if self.backe_mean:
+            self._center_embeddings(state.model)
+            self._bake_mean_into_fc(state.model)
         self._fuse_norms(state.model)
         apply_transform_config(state.model, self.transform_config)
 
@@ -181,6 +184,16 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
         ):
             center_embeddings(embedding)
 
+    def _bake_mean_into_fc(self, model: PreTrainedModel):
+        for _, linears in match_named_modules(
+            model, [self.mappings.attn_o], warn_on_fail=True
+        ):
+            back_mean_into_fc(linears)
+        for _, linears in match_named_modules(
+            model, self.mappings.mlp_out, warn_on_fail=True
+        ):
+            back_mean_into_fc(linears)
+
     def _fuse_norms(self, model: PreTrainedModel):
         for mapping in self.norm_mappings:
             for norm, *linears in match_modules_set(
@@ -199,6 +212,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
                 TransformArgs(
                     targets=[
                         self.mappings.embedding,
+                        *self.mappings.mm_proj,
                         self.mappings.attn_o,
                         *self.mappings.mlp_out,
                     ],

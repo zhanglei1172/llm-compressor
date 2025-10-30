@@ -1,4 +1,5 @@
 import contextlib
+import copy
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
@@ -7,7 +8,12 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
 )
 import torch
 from llmcompressor import oneshot
-from llmcompressor.modifiers.awq import AWQModifier, AWQMapping
+from accelerate.hooks import remove_hook_from_module
+from compressed_tensors import get_execution_device
+from llmcompressor.pipelines.sequential.helpers import SequentialTracer
+from llmcompressor.modifiers.awq import mappings as awq_mappings
+from llmcompressor.modifiers.transform.spinquant import mappings
+from llmcompressor.modifiers.transform.spinquant import norm_mappings
 from llmcompressor.utils import dispatch_for_generation, helpers
 from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
 
@@ -21,15 +27,39 @@ from compressed_tensors.quantization import (
 from qwen_vl_utils import process_vision_info
 from qwen_omni_utils import process_mm_info
 
-from llmcompressor.modifiers.awq.mappings import AWQ_MAPPING_REGISTRY, _moe_default_mappings
-
-AWQ_MAPPING_REGISTRY["Qwen3OmniMoeForConditionalGeneration"] = _moe_default_mappings
+mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = mappings.SpinQuantMapping(
+    mm_proj=["conv_out"],
+    embedding="re:.*positional_embedding$",
+    # embedding="conv_out",
+    attn_q="re:.*q_proj$",
+    attn_k="re:.*k_proj$",
+    attn_v="re:.*v_proj$",
+    attn_o="re:.*out_proj$",
+    mlp_in=["re:.*fc1$"],
+    mlp_out=["re:.*fc2$"],
+    lm_head="proj1",
+)
+norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
+    norm_mappings.NormMapping(
+        norm="re:.*self_attn_layer_norm$",
+        linears=["re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$"],
+    ),
+    norm_mappings.NormMapping(
+        norm="re:.*final_layer_norm$",
+        linears=["re:.*fc1$"],
+    ),
+    norm_mappings.NormMapping(
+        norm="ln_post",
+        linears=["proj1"],
+    ),
+]
 
 #################### configurations ####################
-recipe = "examples/qwen3_omni_configs/audio/gptq.yaml"
-# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
-flag = "gptq"
-# flag = "awq"
+recipe = "examples/qwen3_omni_configs/audio/quarot.yaml"
+recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
+# flag = "quarot"
+flag = "awq"
+fq = True
 #################### configurations ####################
 
 # Select model and load it.
@@ -39,7 +69,10 @@ model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(MODEL_ID, torch_dty
 dtype = model.dtype
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-
+_positional_embedding = model.thinker.audio_tower.positional_embedding
+# _positional_embedding.register_buffer("positional_embedding", _positional_embedding.positional_embedding)
+# model.thinker.audio_tower.positional_embedding = torch.nn.Embedding(*_positional_embedding.positional_embedding.shape, dtype=dtype)
+# model.thinker.audio_tower.positional_embedding.weight.data = _positional_embedding.positional_embedding
 # Select calibration dataset.
 DATASET_ID = "MLCommons/peoples_speech"
 DATASET_ID = "/dataset/workspace/zhangl98/dataset/peoples_speech/test"
@@ -215,6 +248,7 @@ def forward(
 
         positional_embedding = (
             self.positional_embedding.positional_embedding[: padded_embed.shape[1], :]
+            # self.positional_embedding.weight[: padded_embed.shape[1], :]
             .unsqueeze(0)
             .to(padded_embed.dtype)
         )
@@ -243,9 +277,34 @@ sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update({
     "my_wrap": my_wrap,
 })
 
+_tmp_config = copy.deepcopy(model.thinker.audio_tower.config)
+_tmp_config.update({"head_dim": _tmp_config.d_model // _tmp_config.encoder_attention_heads})
+
+original_init = SequentialTracer.__init__
+def my_init(
+    self,
+    ancestors, offloaded
+):
+    original_init(
+        self,
+        ancestors,
+        offloaded,
+    )
+    # Force onload all modules.
+    device = get_execution_device(model)
+    remove_hook_from_module(model.thinker.audio_tower.positional_embedding, recurse=False)
+    model.thinker.audio_tower.positional_embedding.to(device)
+    self.offloaded.remove(model.thinker.audio_tower.positional_embedding)
+
 with contextlib.ExitStack() as stack:
     stack.enter_context(
+        helpers.patch_attr(SequentialTracer, "__init__", my_init)
+    )
+    stack.enter_context(
         helpers.patch_attr(model.thinker.audio_tower, "forward", forward)
+    )
+    stack.enter_context(
+        helpers.patch_attr(model.thinker.audio_tower, "config", _tmp_config)
     )
     # Apply algorithms.
     oneshot(
@@ -286,6 +345,7 @@ sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update({
 # Confirm generations of the quantized model look sane.
 print("\n\n")
 print("========== SAMPLE GENERATION ==============")
+model.thinker.audio_tower.positional_embedding = _positional_embedding
 dispatch_for_generation(model)
 messages = [
     {
@@ -345,7 +405,7 @@ from tqdm import tqdm
 #         if key.endswith("_scale") or key.endswith("_zero_point"):
 #             delattr(module, key)
 
-SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{flag}-sym-com-audio"
+SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{flag}-sym-com-audio" + ("-fq" if fq else "-trans")
 # model.save_pretrained(SAVE_DIR+"-trans") # trans
 # processor.save_pretrained(SAVE_DIR+"-trans")
 # modify_save_pretrained(model)
@@ -362,18 +422,19 @@ for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_target
         )
         quantized_name_set.add(re.sub(r'\d+', 'X', _))
         scheme = getattr(module, "quantization_scheme", None)
-        if isinstance(module, torch.nn.Linear):
-            module.weight.data = forward_quantize(
+        if fq:
+            if isinstance(module, torch.nn.Linear):
+                module.weight.data = forward_quantize(
+                        module, module.weight, "weight", scheme.weights
+                    )
+            elif isinstance(module, torch.nn.Conv2d):
+                module.weight_scale.data = module.weight_scale.data.unsqueeze(-1).unsqueeze(-1)
+                module.weight_zero_point.data = module.weight_zero_point.data.unsqueeze(-1).unsqueeze(-1)
+                module.weight.data = forward_quantize(
                     module, module.weight, "weight", scheme.weights
                 )
-        elif isinstance(module, torch.nn.Conv2d):
-            module.weight_scale.data = module.weight_scale.data.unsqueeze(-1).unsqueeze(-1)
-            module.weight_zero_point.data = module.weight_zero_point.data.unsqueeze(-1).unsqueeze(-1)
-            module.weight.data = forward_quantize(
-                module, module.weight, "weight", scheme.weights
-            )
-        else:
-            raise NotImplementedError(f"Unsupported module type {type(module)}")
+            else:
+                raise NotImplementedError(f"Unsupported module type {type(module)}")
         delattr(module, "quantization_status")
         delattr(module, "quantization_enabled")
         delattr(module, "quantization_scheme")
@@ -381,7 +442,7 @@ for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_target
             if key.endswith("_scale") or key.endswith("_zero_point"):
                 delattr(module, key)
 print(f"Total quantized modules: {quantized_name_set}")
-model.save_pretrained(SAVE_DIR+"-fq")#, save_compressed=True) # fakequant
-processor.save_pretrained(SAVE_DIR+"-fq")
+model.save_pretrained(SAVE_DIR)#, save_compressed=True) # fakequant
+processor.save_pretrained(SAVE_DIR)
 
-print(SAVE_DIR+"-fq")
+print(SAVE_DIR)
