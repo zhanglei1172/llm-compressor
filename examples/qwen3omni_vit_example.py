@@ -41,7 +41,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = (
         attn_q="re:.*q_proj$",
         attn_k="re:.*k_proj$",
         attn_v="re:.*v_proj$",
-        attn_o=r"re:.*\.proj$",
+        attn_o=r"re:.*attn\.proj$",
         mlp_in=["re:.*linear_fc1$"],
         mlp_out=["re:.*linear_fc2$"],
         lm_head=[r"re:merger.*mlp\.0$"],
@@ -63,11 +63,11 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = [
 ]
 
 #################### configurations ####################
-recipe = "examples/qwen3_omni_configs/audio/quarot.yaml"
-# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
+recipe = "examples/qwen3_omni_configs/vit/quarot.yaml"
+# recipe = "examples/qwen3_omni_configs/vit/awq.yaml"
 flag = "quarot"
 # flag = "awq"
-fq = True
+fq = False
 #################### configurations ####################
 
 # Select model and load it.
@@ -88,7 +88,7 @@ DATASET_SPLIT = "test[:512]"
 
 # Select number of samples. 256 samples is a good place to start.
 # Increasing the number of samples can improve accuracy.
-NUM_CALIBRATION_SAMPLES = 512
+NUM_CALIBRATION_SAMPLES = 1
 MAX_SEQUENCE_LENGTH = 2048
 
 # Load dataset and preprocess.
@@ -165,7 +165,7 @@ def my_init(self, ancestors, offloaded):
         offloaded,
     )
     # Force onload all modules.
-    device = get_execution_device(model)
+    device = "cuda"  # get_execution_device(model)
     remove_hook_from_module(model.thinker.visual.pos_embed, recurse=False)
     model.thinker.visual.pos_embed.to(device)
     self.offloaded.remove(model.thinker.visual.pos_embed)
@@ -251,7 +251,7 @@ from tqdm import tqdm
 SAVE_DIR = (
     "/tmp/"
     + MODEL_ID.rstrip("/").split("/")[-1]
-    + f"-{flag}-sym-com-audio"
+    + f"-{flag}-sym-com-vit"
     + ("-fq" if fq else "-trans")
 )
 # model.save_pretrained(SAVE_DIR+"-trans") # trans
@@ -288,7 +288,17 @@ for _, module in match_named_modules(
                     module, module.weight, "weight", scheme.weights
                 )
             elif isinstance(module, torch.nn.Conv3d):
-                print()
+                module.weight_scale.data = (
+                    module.weight_scale.data.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+                )
+                module.weight_zero_point.data = (
+                    module.weight_zero_point.data.unsqueeze(-1)
+                    .unsqueeze(-1)
+                    .unsqueeze(-1)
+                )
+                module.weight.data = forward_quantize(
+                    module, module.weight, "weight", scheme.weights
+                )
             else:
                 raise NotImplementedError(f"Unsupported module type {type(module)}")
         delattr(module, "quantization_status")
