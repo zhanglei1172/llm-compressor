@@ -30,22 +30,21 @@ def center_embeddings(embedding: torch.nn.Module):
 
     update_offload_parameter(embedding, "weight", new_weight)
 
+
 def back_mean_into_fc(linear: torch.nn.Linear):
     exec_device = get_execution_device(linear)
-    with align_module_device(
-        linear, exec_device
-    ):
+    with align_module_device(linear, exec_device):
         weight_dtype = linear.weight.dtype
         new_weight = linear.weight.to(PRECISION)
         new_weight = new_weight - new_weight.mean(dim=-2, keepdim=True)
         new_weight = new_weight.to(weight_dtype)
-        if hasattr(linear, 'bias') and linear.bias is not None:
+        if hasattr(linear, "bias") and linear.bias is not None:
             new_bias = linear.bias.to(PRECISION)
             new_bias = new_bias - new_bias.mean()
             new_bias = new_bias.to(weight_dtype)
 
     update_offload_parameter(linear, "weight", new_weight)
-    if hasattr(linear, 'bias') and linear.bias is not None:
+    if hasattr(linear, "bias") and linear.bias is not None:
         update_offload_parameter(linear, "bias", new_bias)
 
 
@@ -63,16 +62,35 @@ def fuse_norm_linears(norm: torch.nn.Module, linears: Iterable[torch.nn.Linear])
         raise ValueError(f"Cannot fuse norm of type {type(norm)}")
 
     for linear in linears:
+        new_bias = None
         # NOTE: spinquant does this op in float64
         exec_device = get_execution_device(norm)
         with align_module_device(norm, exec_device), align_module_device(
             linear, exec_device
         ):
+            fc_hidden_size = linear.weight.shape[-1]
+            ln_hidden_size = norm.weight.shape[-1]
             weight_dtype = linear.weight.dtype
-            new_weight = linear.weight.to(PRECISION) * norm.weight.to(PRECISION)
+            if fc_hidden_size > ln_hidden_size:
+                norm_weight = norm.weight.data.repeat(fc_hidden_size // ln_hidden_size)
+            else:
+                norm_weight = norm.weight
+            new_weight = linear.weight.to(PRECISION) * norm_weight.to(PRECISION)
             new_weight = new_weight.to(weight_dtype)
+            if hasattr(norm, "bias") and norm.bias is not None:
+                if fc_hidden_size > ln_hidden_size:
+                    norm_bias = norm.bias.data.repeat(fc_hidden_size // ln_hidden_size)
+                else:
+                    norm_bias = norm.bias
+                new_bias = linear.bias.to(PRECISION) + linear.weight.to(
+                    PRECISION
+                ).matmul(norm_bias.to(PRECISION))
+                new_bias = new_bias.to(weight_dtype)
+                norm.register_parameter("bias", None)
 
         update_offload_parameter(linear, "weight", new_weight)
+        if new_bias is not None:
+            update_offload_parameter(linear, "bias", new_bias)
 
     new_norm_weight = torch.ones_like(norm.weight, device="cpu")
     update_offload_parameter(norm, "weight", new_norm_weight)

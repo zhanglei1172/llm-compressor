@@ -14,8 +14,14 @@ from pydantic import Field, ValidationInfo, field_validator
 from transformers import PreTrainedModel
 
 from llmcompressor.core import Event, EventType, State
-from llmcompressor.modeling import center_embeddings, fuse_norm_linears, back_mean_into_fc
+from llmcompressor.modeling import (
+    back_mean_into_fc,
+    center_embeddings,
+    fuse_norm_linears,
+)
+from llmcompressor.modeling.replace import replace_ln_to_rmsnorm
 from llmcompressor.modifiers import Modifier
+from llmcompressor.utils.pytorch.module import get_module_name
 
 from .mappings import SpinQuantMapping, infer_mapping_from_model
 from .norm_mappings import NormMapping, infer_norm_mapping_from_model
@@ -200,6 +206,8 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
                 model, (mapping.norm, *mapping.linears)
             ):
                 fuse_norm_linears(norm, linears)
+                name = get_module_name(model, norm)
+                replace_ln_to_rmsnorm(name, norm, model)
 
     def _create_r1_scheme(self) -> TransformScheme:
         return TransformScheme(
@@ -224,7 +232,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
                         self.mappings.attn_k,
                         self.mappings.attn_v,
                         *self.mappings.mlp_in,
-                        self.mappings.lm_head,
+                        *self.mappings.lm_head,
                     ],
                     location="weight_input",
                     inverse=True,

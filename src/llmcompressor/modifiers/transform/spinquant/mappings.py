@@ -40,9 +40,9 @@ class SpinQuantMapping(BaseModel):
     mlp_in: List[str]  # up_proj, gate_proj
     mlp_out: List[str]  # down_proj
 
-    lm_head: str
+    lm_head: List[str]
 
-    @field_validator("mlp_in", "mlp_out", mode="before")
+    @field_validator("mlp_in", "mlp_out", "mm_proj", "lm_head", mode="before")
     def cast_to_list(cls, value):
         if isinstance(value, str):
             return [value]

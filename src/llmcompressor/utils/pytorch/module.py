@@ -366,3 +366,13 @@ def get_layer_by_name(layer_name: str, module: Module) -> Module:
     :return: Module, the layer with name layer_name
     """
     return attrgetter(layer_name)(module)
+
+
+def get_module_name(model, module):
+    """
+    Get the name of the module in the model.
+    """
+    for name, mod in model.named_modules():
+        if mod is module:
+            return name
+    return None

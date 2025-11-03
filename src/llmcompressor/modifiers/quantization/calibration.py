@@ -84,7 +84,7 @@ def call_observer(
     """
     with align_module_device(module):
         value = module.weight if base_name == "weight" else value
-        if isinstance(module, torch.nn.Conv2d):
+        if isinstance(module, torch.nn.modules.conv._ConvNd):
             value = value.flatten(1)
         observer: Observer = getattr(module, f"{base_name}_observer")
 
