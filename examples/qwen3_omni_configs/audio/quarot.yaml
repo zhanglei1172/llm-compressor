@@ -1,11 +1,14 @@
 quant_stage:
   quant_modifiers:
+    SpinQuantModifier:
+      backe_mean: True
+      rotations: ["R1", "R2"]
+      # transform_block_size: 64
+      transform_type: "hadamard"
     # SmoothQuantModifier:
     #   smoothing_strength: 0.8
-    GPTQModifier:
-      # ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:conv.*", 're:proj[\d].*', "re:positional_embedding*"]
+    QuantizationModifier:
       ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:positional_embedding"]
-      actorder: null
       config_groups:
         group_0:
           weights:

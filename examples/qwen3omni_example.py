@@ -1,23 +1,11 @@
-from typing import Mapping, Optional, Union
-import copy
-from datasets import load_dataset, load_from_disk
-from accelerate.hooks import attach_align_device_hook
-from accelerate.hooks import remove_hook_from_module
-from compressed_tensors import get_execution_device
-from llmcompressor.pipelines.sequential.helpers import SequentialTracer
-from llmcompressor.utils import helpers
 import contextlib
-
+import copy
+from typing import Mapping, Optional, Union
 from unittest.mock import patch
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
-from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
-    Qwen3OmniMoeForConditionalGeneration,
-)
-import torch
-from llmcompressor import oneshot
-from llmcompressor.modifiers.awq import AWQModifier
-from llmcompressor.utils import dispatch_for_generation
 
+import torch
+from accelerate.hooks import attach_align_device_hook, remove_hook_from_module
+from compressed_tensors import get_execution_device
 from compressed_tensors.quantization import (
     QuantizationArgs,
     QuantizationScheme,
@@ -25,24 +13,40 @@ from compressed_tensors.quantization import (
     QuantizationType,
     forward_quantize,
 )
-from qwen_vl_utils import process_vision_info
+from datasets import load_dataset, load_from_disk
 from qwen_omni_utils import process_mm_info
+from qwen_vl_utils import process_vision_info
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+    Qwen3OmniMoeForConditionalGeneration,
+)
+
+from llmcompressor import oneshot
+from llmcompressor.modifiers.awq import AWQModifier
 from llmcompressor.modifiers.awq import mappings as awq_mappings
-from llmcompressor.modifiers.transform.spinquant import mappings
-from llmcompressor.modifiers.transform.spinquant import norm_mappings
+from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
+from llmcompressor.pipelines.sequential.helpers import SequentialTracer
+from llmcompressor.utils import dispatch_for_generation, helpers
 
 # awq_mappings.AWQ_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = awq_mappings._moe_default_mappings
 
-mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = mappings.SpinQuantMapping(
-    mm_proj=[r"re:.*audio_tower\.proj2$", r"re:.*visual\.merger.*mlp\.2$"],
-    embedding="re:.*embed_tokens$",
-    attn_q="re:.*model.*q_proj$",
-    attn_k="re:.*model.*k_proj$",
-    attn_v="re:.*model.*v_proj$",
-    attn_o="re:.*model.*o_proj$",
-    mlp_in=[r"re:.*mlp\.gate$"] + [rf"re:.*model.*\.{i}\.{x}$" for x in ["up_proj", "gate_proj"] for i in range(128)],
-    mlp_out=[rf"re:.*model.*\.{i}\.down_proj$" for i in range(128)],
-    lm_head="lm_head",
+mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = (
+    mappings.SpinQuantMapping(
+        mm_proj=[r"re:.*audio_tower\.proj2$", r"re:.*visual\.merger.*mlp\.2$"],
+        embedding="re:.*embed_tokens$",
+        attn_q="re:.*model.*q_proj$",
+        attn_k="re:.*model.*k_proj$",
+        attn_v="re:.*model.*v_proj$",
+        attn_o="re:.*model.*o_proj$",
+        mlp_in=[r"re:.*mlp\.gate$"]
+        + [
+            rf"re:.*model.*\.{i}\.{x}$"
+            for x in ["up_proj", "gate_proj"]
+            for i in range(128)
+        ],
+        mlp_out=[rf"re:.*model.*\.{i}\.down_proj$" for i in range(128)],
+        lm_head="lm_head",
+    )
 )
 norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = [
     norm_mappings.NormMapping(
@@ -51,7 +55,12 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
     ),
     norm_mappings.NormMapping(
         norm="re:.*model.*post_attention_layernorm$",
-        linears=[r"re:.*mlp\.gate$"] + [rf"re:.*model.*\.{i}\.{x}$" for x in ["up_proj", "gate_proj"] for i in range(128)],
+        linears=[r"re:.*mlp\.gate$"]
+        + [
+            rf"re:.*model.*\.{i}\.{x}$"
+            for x in ["up_proj", "gate_proj"]
+            for i in range(128)
+        ],
     ),
     norm_mappings.NormMapping(
         norm="model.norm",
@@ -63,16 +72,15 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
 calibrate_moe_context = True
 # Select model and load it.
 pretrain = "origin"
-recipe = "examples/qwen3_omni_configs/text/mse.yaml"
-flag = "mse"
-fq = True
+recipe = "examples/qwen3_omni_configs/text/quarot.yaml"
+flag = "quarot"
+fq = False
 realq = False
 NUM_CALIBRATION_SAMPLES = 1
 #################### configurations ####################
 
 
 if pretrain == "ostq":
-
     MODEL_ID = "/code/omni_ostq/transformed_model/"
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
@@ -101,7 +109,9 @@ ds = ds.shuffle(seed=42)
 
 USE_AUDIO_IN_VIDEO = True
 
-model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype="auto")
+model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+    MODEL_ID, torch_dtype="auto"
+)
 dtype = model.dtype
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
@@ -125,31 +135,41 @@ processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 #         truncation=True,
 #     )
 
+
 def preprocess(example):
     # conversation = example["messages"]
-    conversation = [{
-        "role": "user",
-        "content": [
-            {
-                "type": "image",
-                "image": example["image"],
-            },
-            {
-                "type": "text",
-                # "text": example["text"].capitalize(),
-                "text": "What does the image show?"
-            },
-        ]
-    }]
-    text = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
-    audios, images, videos = process_mm_info(conversation, use_audio_in_video=USE_AUDIO_IN_VIDEO)
-    return processor(text=text, 
-                   audio=audios, 
-                   images=images, 
-                   videos=videos, 
-                   return_tensors="pt", 
-                   padding=True, 
-                   use_audio_in_video=USE_AUDIO_IN_VIDEO)
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": example["image"],
+                },
+                {
+                    "type": "text",
+                    # "text": example["text"].capitalize(),
+                    "text": "What does the image show?",
+                },
+            ],
+        }
+    ]
+    text = processor.apply_chat_template(
+        conversation, add_generation_prompt=True, tokenize=False
+    )
+    audios, images, videos = process_mm_info(
+        conversation, use_audio_in_video=USE_AUDIO_IN_VIDEO
+    )
+    return processor(
+        text=text,
+        audio=audios,
+        images=images,
+        videos=videos,
+        return_tensors="pt",
+        padding=True,
+        use_audio_in_video=USE_AUDIO_IN_VIDEO,
+    )
+
 
 ds = ds.map(preprocess, remove_columns=ds.column_names)
 
@@ -164,10 +184,14 @@ ds = ds.map(preprocess, remove_columns=ds.column_names)
 #         add_special_tokens=False,
 #     )
 
+
 # Define a oneshot data collator for multimodal inputs.
 def data_collator(batch):
     assert len(batch) == 1
-    return {key: torch.tensor(value, dtype=dtype if key== "pixel_values" else None) for key, value in batch[0].items()}
+    return {
+        key: torch.tensor(value, dtype=dtype if key == "pixel_values" else None)
+        for key, value in batch[0].items()
+    }
 
 
 # Configure the quantization algorithm to run.
@@ -193,12 +217,10 @@ def data_collator(batch):
 # ]
 
 
-
 original_init = SequentialTracer.__init__
-def my_init(
-    self,
-    ancestors, offloaded
-):
+
+
+def my_init(self, ancestors, offloaded):
     original_init(
         self,
         ancestors,
@@ -210,16 +232,13 @@ def my_init(
     model.thinker.visual.pos_embed.to(device)
     self.offloaded.remove(model.thinker.visual.pos_embed)
 
+
 _tmp_config = copy.deepcopy(model.thinker.config)
 _tmp_config.update(model.thinker.config.text_config.to_dict())
 
 with contextlib.ExitStack() as stack:
-    stack.enter_context(
-        helpers.patch_attr(SequentialTracer, "__init__", my_init)
-    )
-    stack.enter_context(
-        helpers.patch_attr(model.thinker, "config", _tmp_config)
-    )
+    stack.enter_context(helpers.patch_attr(SequentialTracer, "__init__", my_init))
+    stack.enter_context(helpers.patch_attr(model.thinker, "config", _tmp_config))
     # Apply algorithms.
     oneshot(
         model=model.thinker,
@@ -296,8 +315,16 @@ from tqdm import tqdm
 #     except:
 #         print(f"Quantization status is not frozen for {prefix}")
 
-SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{pretrain}-{flag}-sym-com-text" + ("-realq" if realq else ("-fq" if fq else "-trans"))
-from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
+SAVE_DIR = (
+    "/tmp/"
+    + MODEL_ID.rstrip("/").split("/")[-1]
+    + f"-{pretrain}-{flag}-sym-com-text"
+    + ("-realq" if realq else ("-fq" if fq else "-trans"))
+)
+from llmcompressor.transformers.compression.compressed_tensors_utils import (
+    modify_save_pretrained,
+)
+
 if realq:
     modify_save_pretrained(model)
     model.save_pretrained(SAVE_DIR, save_compressed=True)
@@ -310,23 +337,25 @@ if realq:
 # processor.save_pretrained(SAVE_DIR+"-trans")
 # modify_save_pretrained(model)
 from llmcompressor.recipe import Recipe
-recipe = Recipe.create_instance(
-                path_or_modifiers=recipe, target_stage=None
-            )
+
+recipe = Recipe.create_instance(path_or_modifiers=recipe, target_stage=None)
 
 quantized_name_set = set()
 import re
-for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore):
+
+for _, module in match_named_modules(
+    model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore
+):
     if hasattr(module, "quantization_status"):
-        assert module.quantization_status == QuantizationStatus.FROZEN, (
-            f"{module.quantization_status}"
-        )
-        quantized_name_set.add(re.sub(r'\d+', 'X', _))
+        assert (
+            module.quantization_status == QuantizationStatus.FROZEN
+        ), f"{module.quantization_status}"
+        quantized_name_set.add(re.sub(r"\d+", "X", _))
         scheme = getattr(module, "quantization_scheme", None)
         if fq:
             module.weight.data = forward_quantize(
-                    module, module.weight, "weight", scheme.weights
-                )
+                module, module.weight, "weight", scheme.weights
+            )
         delattr(module, "quantization_status")
         delattr(module, "quantization_enabled")
         delattr(module, "quantization_scheme")
@@ -334,7 +363,7 @@ for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_target
             if key.endswith("_scale") or key.endswith("_zero_point"):
                 delattr(module, key)
 print(f"Total quantized modules: {quantized_name_set}")
-model.save_pretrained(SAVE_DIR)#, save_compressed=True) # fakequant
+model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
 processor.save_pretrained(SAVE_DIR)
 
 print(SAVE_DIR)

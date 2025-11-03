@@ -2,7 +2,7 @@ quant_stage:
   quant_modifiers:
     SpinQuantModifier:
       rotations: ["R1", "R2"]
-      transform_block_size: 128
+      # transform_block_size: 128
       transform_type: "hadamard"
     # SmoothQuantModifier:
     #   smoothing_strength: 0.8

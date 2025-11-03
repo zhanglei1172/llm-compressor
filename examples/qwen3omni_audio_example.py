@@ -1,22 +1,9 @@
 import contextlib
 import copy
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
-from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
-    Qwen3OmniMoeForConditionalGeneration,
-    _get_feat_extract_output_lengths,
-)
+
 import torch
-from llmcompressor import oneshot
 from accelerate.hooks import remove_hook_from_module
 from compressed_tensors import get_execution_device
-from llmcompressor.pipelines.sequential.helpers import SequentialTracer
-from llmcompressor.modifiers.awq import mappings as awq_mappings
-from llmcompressor.modifiers.transform.spinquant import mappings
-from llmcompressor.modifiers.transform.spinquant import norm_mappings
-from llmcompressor.utils import dispatch_for_generation, helpers
-from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
-
 from compressed_tensors.quantization import (
     QuantizationArgs,
     QuantizationScheme,
@@ -24,20 +11,37 @@ from compressed_tensors.quantization import (
     QuantizationType,
     forward_quantize,
 )
-from qwen_vl_utils import process_vision_info
+from datasets import load_dataset
 from qwen_omni_utils import process_mm_info
+from qwen_vl_utils import process_vision_info
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+    Qwen3OmniMoeForConditionalGeneration,
+    _get_feat_extract_output_lengths,
+)
 
-mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = mappings.SpinQuantMapping(
-    mm_proj=["conv_out"],
-    embedding="re:.*positional_embedding$",
-    # embedding="conv_out",
-    attn_q="re:.*q_proj$",
-    attn_k="re:.*k_proj$",
-    attn_v="re:.*v_proj$",
-    attn_o="re:.*out_proj$",
-    mlp_in=["re:.*fc1$"],
-    mlp_out=["re:.*fc2$"],
-    lm_head="proj1",
+from llmcompressor import oneshot
+from llmcompressor.modifiers.awq import mappings as awq_mappings
+from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
+from llmcompressor.pipelines.sequential.helpers import SequentialTracer
+from llmcompressor.transformers.compression.compressed_tensors_utils import (
+    modify_save_pretrained,
+)
+from llmcompressor.utils import dispatch_for_generation, helpers
+
+mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = (
+    mappings.SpinQuantMapping(
+        mm_proj=["conv_out"],
+        embedding="re:.*positional_embedding$",
+        # embedding="conv_out",
+        attn_q="re:.*q_proj$",
+        attn_k="re:.*k_proj$",
+        attn_v="re:.*v_proj$",
+        attn_o="re:.*out_proj$",
+        mlp_in=["re:.*fc1$"],
+        mlp_out=["re:.*fc2$"],
+        lm_head="proj1",
+    )
 )
 norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
     norm_mappings.NormMapping(
@@ -65,7 +69,9 @@ fq = True
 # Select model and load it.
 MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
-model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype="auto")
+model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+    MODEL_ID, torch_dtype="auto"
+)
 dtype = model.dtype
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
@@ -94,34 +100,43 @@ ds = ds.shuffle(seed=42)
 
 USE_AUDIO_IN_VIDEO = True
 
+
 def preprocess(example):
-    conversation = [{
-        "role": "user",
-        "content": [
-            {
-                "type": "audio",
-                "audio": example["audio"]["array"],
-            },
-            {
-                "type": "text",
-                "text": example["text"].capitalize(),
-            },
-        ]
-    }]
-    text = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
-    audios, images, videos = process_mm_info(conversation, use_audio_in_video=USE_AUDIO_IN_VIDEO)
-    ret = processor(text=text, 
-                   audio=audios, 
-                   images=images, 
-                   videos=videos, 
-                   return_tensors="pt", 
-                   padding=True, 
-                   use_audio_in_video=USE_AUDIO_IN_VIDEO)
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "audio",
+                    "audio": example["audio"]["array"],
+                },
+                {
+                    "type": "text",
+                    "text": example["text"].capitalize(),
+                },
+            ],
+        }
+    ]
+    text = processor.apply_chat_template(
+        conversation, add_generation_prompt=True, tokenize=False
+    )
+    audios, images, videos = process_mm_info(
+        conversation, use_audio_in_video=USE_AUDIO_IN_VIDEO
+    )
+    ret = processor(
+        text=text,
+        audio=audios,
+        images=images,
+        videos=videos,
+        return_tensors="pt",
+        padding=True,
+        use_audio_in_video=USE_AUDIO_IN_VIDEO,
+    )
     # ret = {
     #     k: v.astype(dtype) if torch.is_floating_point(v) else v
     #     for k, v in ret.items()
     #     }
-    del ret['input_ids'], ret['attention_mask']
+    del ret["input_ids"], ret["attention_mask"]
     return ret
 
 
@@ -130,10 +145,21 @@ ds = ds.map(preprocess, remove_columns=ds.column_names)
 
 def data_collator(batch):
     assert len(batch) == 1
-    ret = {key: torch.tensor(value, dtype=dtype if key== "input_features" else None) for key, value in batch[0].items()}
-    audio_feature_lengths = torch.sum(ret['feature_attention_mask'], dim=1)
-    input_features = ret['input_features'].permute(0, 2, 1)[ret['feature_attention_mask'].bool()].permute(1, 0)
-    feature_lens = audio_feature_lengths if audio_feature_lengths is not None else ret['feature_attention_mask'].sum(-1)
+    ret = {
+        key: torch.tensor(value, dtype=dtype if key == "input_features" else None)
+        for key, value in batch[0].items()
+    }
+    audio_feature_lengths = torch.sum(ret["feature_attention_mask"], dim=1)
+    input_features = (
+        ret["input_features"]
+        .permute(0, 2, 1)[ret["feature_attention_mask"].bool()]
+        .permute(1, 0)
+    )
+    feature_lens = (
+        audio_feature_lengths
+        if audio_feature_lengths is not None
+        else ret["feature_attention_mask"].sum(-1)
+    )
     return {"input_features": input_features, "feature_lens": feature_lens}
 
 
@@ -191,100 +217,123 @@ def my_wrap(self, feature_lens, input_features):
     chunk_lengths[chunk_lengths == 0] = self.n_window * 2
 
     chunk_list = input_features.T.split(chunk_lengths.tolist(), dim=0)
-    padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
+    padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(
+        1, 2
+    )
     feature_lens_after_cnn = _get_feat_extract_output_lengths(chunk_lengths)
     padded_mask_after_cnn = nn.utils.rnn.pad_sequence(
-        [torch.ones(length, dtype=torch.bool, device=padded_feature.device) for length in feature_lens_after_cnn],
+        [
+            torch.ones(length, dtype=torch.bool, device=padded_feature.device)
+            for length in feature_lens_after_cnn
+        ],
         batch_first=True,
     )
     padded_feature = padded_feature.unsqueeze(1)
     return aftercnn_lens, padded_feature, padded_mask_after_cnn
 
+
 # @torch.fx.wrap
 def my_wrap_0(self, padded_feature):
     padded_embeds = []
     for chunk in padded_feature.split(self.conv_chunksize, dim=0):
-    # padded_embed = F.gelu(self.conv2d1(padded_feature))
+        # padded_embed = F.gelu(self.conv2d1(padded_feature))
         padded_embed = F.gelu(self.conv2d1(chunk))
         padded_embed = F.gelu(self.conv2d2(padded_embed))
         padded_embed = F.gelu(self.conv2d3(padded_embed))
         padded_embeds.append(padded_embed)
     return torch.cat(padded_embeds, dim=0)
 
+
 # @torch.fx.wrap
 def my_wrap_1(self, aftercnn_lens, padded_mask_after_cnn):
     cu_chunk_lens = [0]
-    window_aftercnn = padded_mask_after_cnn.shape[-1] * (self.n_window_infer // (self.n_window * 2))
+    window_aftercnn = padded_mask_after_cnn.shape[-1] * (
+        self.n_window_infer // (self.n_window * 2)
+    )
     for cnn_len in aftercnn_lens:
         cu_chunk_lens += [window_aftercnn] * (cnn_len // window_aftercnn)
         remainder = cnn_len % window_aftercnn
         if remainder != 0:
             cu_chunk_lens += [remainder]
-    cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
+    cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(
+        -1, dtype=torch.int32
+    )
     return cu_seqlens
 
-from transformers.modeling_outputs import BaseModelOutput
-import torch.nn.functional as F
+
 import torch.nn as nn
+import torch.nn.functional as F
+from transformers.modeling_outputs import BaseModelOutput
+
 
 def forward(
-        self,
-        input_features,
-        feature_lens=None,
-        aftercnn_lens=None,
+    self,
+    input_features,
+    feature_lens=None,
+    aftercnn_lens=None,
 ):
-        aftercnn_lens, padded_feature, padded_mask_after_cnn = my_wrap(self, feature_lens, input_features)
-        # Split to chunk to avoid OOM during convolution
-        # padded_embeds = []
-        # for chunk in padded_feature.split(self.conv_chunksize, dim=0):
-        #     padded_embed = F.gelu(self.conv2d1(chunk))
-        #     padded_embed = F.gelu(self.conv2d2(padded_embed))
-        #     padded_embed = F.gelu(self.conv2d3(padded_embed))
-        #     padded_embeds.append(padded_embed)
-        # padded_embed = torch.cat(padded_embeds, dim=0)
-        padded_embed = my_wrap_0(self, padded_feature)
-        b, c, f, t = padded_embed.size()
-        padded_embed = self.conv_out(padded_embed.permute(0, 3, 1, 2).contiguous().view(b, t, c * f))
+    aftercnn_lens, padded_feature, padded_mask_after_cnn = my_wrap(
+        self, feature_lens, input_features
+    )
+    # Split to chunk to avoid OOM during convolution
+    # padded_embeds = []
+    # for chunk in padded_feature.split(self.conv_chunksize, dim=0):
+    #     padded_embed = F.gelu(self.conv2d1(chunk))
+    #     padded_embed = F.gelu(self.conv2d2(padded_embed))
+    #     padded_embed = F.gelu(self.conv2d3(padded_embed))
+    #     padded_embeds.append(padded_embed)
+    # padded_embed = torch.cat(padded_embeds, dim=0)
+    padded_embed = my_wrap_0(self, padded_feature)
+    b, c, f, t = padded_embed.size()
+    padded_embed = self.conv_out(
+        padded_embed.permute(0, 3, 1, 2).contiguous().view(b, t, c * f)
+    )
 
-        positional_embedding = (
-            self.positional_embedding.positional_embedding[: padded_embed.shape[1], :]
-            # self.positional_embedding.weight[: padded_embed.shape[1], :]
-            .unsqueeze(0)
-            .to(padded_embed.dtype)
+    positional_embedding = (
+        self.positional_embedding.positional_embedding[: padded_embed.shape[1], :]
+        # self.positional_embedding.weight[: padded_embed.shape[1], :]
+        .unsqueeze(0)
+        .to(padded_embed.dtype)
+    )
+    padded_embed = padded_embed + positional_embedding
+    hidden_states = padded_embed[padded_mask_after_cnn]
+    cu_seqlens = my_wrap_1(self, aftercnn_lens, padded_mask_after_cnn)
+
+    for encoder_layer in self.layers:
+        layer_outputs = encoder_layer(
+            hidden_states,
+            cu_seqlens,
         )
-        padded_embed = padded_embed + positional_embedding
-        hidden_states = padded_embed[padded_mask_after_cnn]
-        cu_seqlens = my_wrap_1(self, aftercnn_lens, padded_mask_after_cnn)
 
-        for encoder_layer in self.layers:
-            layer_outputs = encoder_layer(
-                hidden_states,
-                cu_seqlens,
-            )
+        hidden_states = layer_outputs[0]
 
-            hidden_states = layer_outputs[0]
+    hidden_states = self.ln_post(hidden_states)
+    hidden_states = self.proj1(hidden_states)
+    hidden_states = self.act(hidden_states)
+    hidden_states = self.proj2(hidden_states)
+    return BaseModelOutput(last_hidden_state=hidden_states)
 
-        hidden_states = self.ln_post(hidden_states)
-        hidden_states = self.proj1(hidden_states)
-        hidden_states = self.act(hidden_states)
-        hidden_states = self.proj2(hidden_states)
-        return BaseModelOutput(last_hidden_state=hidden_states)
+
 import sys
-sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update({
-    "forward": forward,
-    "my_wrap_0": my_wrap_0,
-    "my_wrap_1": my_wrap_1,
-    "my_wrap": my_wrap,
-})
+
+sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
+    {
+        "forward": forward,
+        "my_wrap_0": my_wrap_0,
+        "my_wrap_1": my_wrap_1,
+        "my_wrap": my_wrap,
+    }
+)
 
 _tmp_config = copy.deepcopy(model.thinker.audio_tower.config)
-_tmp_config.update({"head_dim": _tmp_config.d_model // _tmp_config.encoder_attention_heads})
+_tmp_config.update(
+    {"head_dim": _tmp_config.d_model // _tmp_config.encoder_attention_heads}
+)
 
 original_init = SequentialTracer.__init__
-def my_init(
-    self,
-    ancestors, offloaded
-):
+
+
+def my_init(self, ancestors, offloaded):
     original_init(
         self,
         ancestors,
@@ -292,14 +341,15 @@ def my_init(
     )
     # Force onload all modules.
     device = get_execution_device(model)
-    remove_hook_from_module(model.thinker.audio_tower.positional_embedding, recurse=False)
+    remove_hook_from_module(
+        model.thinker.audio_tower.positional_embedding, recurse=False
+    )
     model.thinker.audio_tower.positional_embedding.to(device)
     self.offloaded.remove(model.thinker.audio_tower.positional_embedding)
 
+
 with contextlib.ExitStack() as stack:
-    stack.enter_context(
-        helpers.patch_attr(SequentialTracer, "__init__", my_init)
-    )
+    stack.enter_context(helpers.patch_attr(SequentialTracer, "__init__", my_init))
     stack.enter_context(
         helpers.patch_attr(model.thinker.audio_tower, "forward", forward)
     )
@@ -313,23 +363,23 @@ with contextlib.ExitStack() as stack:
         dataset=ds,
         recipe=recipe,
         tracing_ignore=[
-                "_update_causal_mask",
-                "create_causal_mask",
-                "_update_mamba_mask",
-                "make_causal_mask",
-                "get_causal_mask",
-                "mask_interface",
-                "mask_function",
-                "_prepare_4d_causal_attention_mask",
-                "_prepare_fsmt_decoder_inputs",
-                "_prepare_4d_causal_attention_mask_with_cache_position",
-                "_update_linear_attn_mask",
-                "pad_sequence",
-                "my_wrap_0",
-                "my_wrap_1",
-                "my_wrap",
-                # "tolist",
-            ],
+            "_update_causal_mask",
+            "create_causal_mask",
+            "_update_mamba_mask",
+            "make_causal_mask",
+            "get_causal_mask",
+            "mask_interface",
+            "mask_function",
+            "_prepare_4d_causal_attention_mask",
+            "_prepare_fsmt_decoder_inputs",
+            "_prepare_4d_causal_attention_mask_with_cache_position",
+            "_update_linear_attn_mask",
+            "pad_sequence",
+            "my_wrap_0",
+            "my_wrap_1",
+            "my_wrap",
+            # "tolist",
+        ],
         tie_word_embeddings=True,
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
@@ -338,9 +388,11 @@ with contextlib.ExitStack() as stack:
         sequential_targets=["Qwen3OmniMoeAudioEncoderLayer"],
     )
 
-sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update({
-    "forward": model.thinker.audio_tower.forward,
-})
+sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
+    {
+        "forward": model.thinker.audio_tower.forward,
+    }
+)
 
 # Confirm generations of the quantized model look sane.
 print("\n\n")
@@ -405,31 +457,42 @@ from tqdm import tqdm
 #         if key.endswith("_scale") or key.endswith("_zero_point"):
 #             delattr(module, key)
 
-SAVE_DIR = "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{flag}-sym-com-audio" + ("-fq" if fq else "-trans")
+SAVE_DIR = (
+    "/tmp/"
+    + MODEL_ID.rstrip("/").split("/")[-1]
+    + f"-{flag}-sym-com-audio"
+    + ("-fq" if fq else "-trans")
+)
 # model.save_pretrained(SAVE_DIR+"-trans") # trans
 # processor.save_pretrained(SAVE_DIR+"-trans")
 # modify_save_pretrained(model)
 from llmcompressor.recipe import Recipe
-recipe = Recipe.create_instance(
-                path_or_modifiers=recipe, target_stage=None
-            )
+
+recipe = Recipe.create_instance(path_or_modifiers=recipe, target_stage=None)
 quantized_name_set = set()
 import re
-for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore):
+
+for _, module in match_named_modules(
+    model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore
+):
     if hasattr(module, "quantization_status"):
-        assert module.quantization_status == QuantizationStatus.FROZEN, (
-            f"{module.quantization_status}"
-        )
-        quantized_name_set.add(re.sub(r'\d+', 'X', _))
+        assert (
+            module.quantization_status == QuantizationStatus.FROZEN
+        ), f"{module.quantization_status}"
+        quantized_name_set.add(re.sub(r"\d+", "X", _))
         scheme = getattr(module, "quantization_scheme", None)
         if fq:
             if isinstance(module, torch.nn.Linear):
                 module.weight.data = forward_quantize(
-                        module, module.weight, "weight", scheme.weights
-                    )
+                    module, module.weight, "weight", scheme.weights
+                )
             elif isinstance(module, torch.nn.Conv2d):
-                module.weight_scale.data = module.weight_scale.data.unsqueeze(-1).unsqueeze(-1)
-                module.weight_zero_point.data = module.weight_zero_point.data.unsqueeze(-1).unsqueeze(-1)
+                module.weight_scale.data = module.weight_scale.data.unsqueeze(
+                    -1
+                ).unsqueeze(-1)
+                module.weight_zero_point.data = module.weight_zero_point.data.unsqueeze(
+                    -1
+                ).unsqueeze(-1)
                 module.weight.data = forward_quantize(
                     module, module.weight, "weight", scheme.weights
                 )
@@ -442,7 +505,7 @@ for _, module in match_named_modules(model, recipe.modifiers[-1].resolved_target
             if key.endswith("_scale") or key.endswith("_zero_point"):
                 delattr(module, key)
 print(f"Total quantized modules: {quantized_name_set}")
-model.save_pretrained(SAVE_DIR)#, save_compressed=True) # fakequant
+model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
 processor.save_pretrained(SAVE_DIR)
 
 print(SAVE_DIR)
