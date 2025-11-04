@@ -81,7 +81,7 @@ NUM_CALIBRATION_SAMPLES = 1
 
 
 if pretrain == "ostq":
-    MODEL_ID = "/code/omni_ostq/transformed_model/"
+    MODEL_ID = "/code/omni_ostq_w_bf16/transformed_model/"
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 

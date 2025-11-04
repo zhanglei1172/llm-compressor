@@ -17,10 +17,13 @@ from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
-    _get_feat_extract_output_lengths,
 )
 
 from llmcompressor import oneshot
+from llmcompressor.modeling.qwen3_omni_moe import (
+    get_audio_wrap_functions,
+    replace_audio_embedding,
+)
 from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
@@ -60,10 +63,10 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 
 #################### configurations ####################
 recipe = "examples/qwen3_omni_configs/audio/quarot.yaml"
-recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
-# flag = "quarot"
-flag = "awq"
-fq = True
+# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
+flag = "quarot"
+# flag = "awq"
+fq = False
 #################### configurations ####################
 
 # Select model and load it.
@@ -73,6 +76,7 @@ model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
 )
 dtype = model.dtype
+replace_audio_embedding(model.thinker.audio_tower)
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 _positional_embedding = model.thinker.audio_tower.positional_embedding
@@ -203,126 +207,12 @@ def data_collator(batch):
 # ]
 
 
-def my_wrap(self, feature_lens, input_features):
-    aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
-    chunk_num = torch.ceil(feature_lens / (self.n_window * 2)).long()
-
-    chunk_lengths = torch.tensor(
-        [self.n_window * 2] * chunk_num.sum(),
-        dtype=torch.long,
-        device=feature_lens.device,
-    )
-    tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
-    chunk_lengths[tail_chunk_index] = feature_lens % (self.n_window * 2)
-    chunk_lengths[chunk_lengths == 0] = self.n_window * 2
-
-    chunk_list = input_features.T.split(chunk_lengths.tolist(), dim=0)
-    padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(
-        1, 2
-    )
-    feature_lens_after_cnn = _get_feat_extract_output_lengths(chunk_lengths)
-    padded_mask_after_cnn = nn.utils.rnn.pad_sequence(
-        [
-            torch.ones(length, dtype=torch.bool, device=padded_feature.device)
-            for length in feature_lens_after_cnn
-        ],
-        batch_first=True,
-    )
-    padded_feature = padded_feature.unsqueeze(1)
-    return aftercnn_lens, padded_feature, padded_mask_after_cnn
-
-
-# @torch.fx.wrap
-def my_wrap_0(self, padded_feature):
-    padded_embeds = []
-    for chunk in padded_feature.split(self.conv_chunksize, dim=0):
-        # padded_embed = F.gelu(self.conv2d1(padded_feature))
-        padded_embed = F.gelu(self.conv2d1(chunk))
-        padded_embed = F.gelu(self.conv2d2(padded_embed))
-        padded_embed = F.gelu(self.conv2d3(padded_embed))
-        padded_embeds.append(padded_embed)
-    return torch.cat(padded_embeds, dim=0)
-
-
-# @torch.fx.wrap
-def my_wrap_1(self, aftercnn_lens, padded_mask_after_cnn):
-    cu_chunk_lens = [0]
-    window_aftercnn = padded_mask_after_cnn.shape[-1] * (
-        self.n_window_infer // (self.n_window * 2)
-    )
-    for cnn_len in aftercnn_lens:
-        cu_chunk_lens += [window_aftercnn] * (cnn_len // window_aftercnn)
-        remainder = cnn_len % window_aftercnn
-        if remainder != 0:
-            cu_chunk_lens += [remainder]
-    cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(
-        -1, dtype=torch.int32
-    )
-    return cu_seqlens
-
-
-import torch.nn as nn
-import torch.nn.functional as F
-from transformers.modeling_outputs import BaseModelOutput
-
-
-def forward(
-    self,
-    input_features,
-    feature_lens=None,
-    aftercnn_lens=None,
-):
-    aftercnn_lens, padded_feature, padded_mask_after_cnn = my_wrap(
-        self, feature_lens, input_features
-    )
-    # Split to chunk to avoid OOM during convolution
-    # padded_embeds = []
-    # for chunk in padded_feature.split(self.conv_chunksize, dim=0):
-    #     padded_embed = F.gelu(self.conv2d1(chunk))
-    #     padded_embed = F.gelu(self.conv2d2(padded_embed))
-    #     padded_embed = F.gelu(self.conv2d3(padded_embed))
-    #     padded_embeds.append(padded_embed)
-    # padded_embed = torch.cat(padded_embeds, dim=0)
-    padded_embed = my_wrap_0(self, padded_feature)
-    b, c, f, t = padded_embed.size()
-    padded_embed = self.conv_out(
-        padded_embed.permute(0, 3, 1, 2).contiguous().view(b, t, c * f)
-    )
-
-    positional_embedding = (
-        self.positional_embedding.positional_embedding[: padded_embed.shape[1], :]
-        # self.positional_embedding.weight[: padded_embed.shape[1], :]
-        .unsqueeze(0)
-        .to(padded_embed.dtype)
-    )
-    padded_embed = padded_embed + positional_embedding
-    hidden_states = padded_embed[padded_mask_after_cnn]
-    cu_seqlens = my_wrap_1(self, aftercnn_lens, padded_mask_after_cnn)
-
-    for encoder_layer in self.layers:
-        layer_outputs = encoder_layer(
-            hidden_states,
-            cu_seqlens,
-        )
-
-        hidden_states = layer_outputs[0]
-
-    hidden_states = self.ln_post(hidden_states)
-    hidden_states = self.proj1(hidden_states)
-    hidden_states = self.act(hidden_states)
-    hidden_states = self.proj2(hidden_states)
-    return BaseModelOutput(last_hidden_state=hidden_states)
-
-
 import sys
 
+audio_wrap_funcs = get_audio_wrap_functions()
+
 sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
-    {
-        "forward": forward,
-        "my_wrap_0": my_wrap_0,
-        "my_wrap_1": my_wrap_1,
-        "my_wrap": my_wrap,
-    }
+    audio_wrap_funcs
 )
 
 _tmp_config = copy.deepcopy(model.thinker.audio_tower.config)
@@ -351,7 +241,9 @@ def my_init(self, ancestors, offloaded):
 with contextlib.ExitStack() as stack:
     stack.enter_context(helpers.patch_attr(SequentialTracer, "__init__", my_init))
     stack.enter_context(
-        helpers.patch_attr(model.thinker.audio_tower, "forward", forward)
+        helpers.patch_attr(
+            model.thinker.audio_tower, "forward", audio_wrap_funcs["forward"]
+        )
     )
     stack.enter_context(
         helpers.patch_attr(model.thinker.audio_tower, "config", _tmp_config)
