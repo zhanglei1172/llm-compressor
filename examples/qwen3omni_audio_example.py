@@ -242,7 +242,9 @@ with contextlib.ExitStack() as stack:
     stack.enter_context(helpers.patch_attr(SequentialTracer, "__init__", my_init))
     stack.enter_context(
         helpers.patch_attr(
-            model.thinker.audio_tower, "forward", audio_wrap_funcs["forward"]
+            model.thinker.audio_tower,
+            "forward",
+            audio_wrap_funcs["forward"].__get__(model.thinker.audio_tower),
         )
     )
     stack.enter_context(

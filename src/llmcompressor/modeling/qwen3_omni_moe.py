@@ -313,6 +313,18 @@ def replace_audio_embedding(module: torch.nn.Module):
         else:
             replace_audio_embedding(child)
 
+def replace_rmsnorm(module: torch.nn.Module):
+    for name, child in module.named_children():
+        if isinstance(child, torch.nn.LayerNorm):
+            replaced = torch.nn.RMSNorm(
+                child.normalized_shape[0],
+                eps=child.eps,
+                dtype=child.weight.dtype,
+            )
+            replaced.weight.data = child.weight.data.clone()
+            setattr(module, name, replaced)
+        else:
+            replace_rmsnorm(child)
 
 def replace():
     return moe_forward
