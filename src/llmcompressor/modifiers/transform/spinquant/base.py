@@ -191,12 +191,19 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
             center_embeddings(embedding)
 
     def _bake_mean_into_fc(self, model: PreTrainedModel):
+        '''
+        center the weights of Linear layers(prev-op of layernorm) to have zero-mean rows
+        '''
         for _, linears in match_named_modules(
             model, [self.mappings.attn_o], warn_on_fail=True
         ):
             back_mean_into_fc(linears)
         for _, linears in match_named_modules(
             model, self.mappings.mlp_out, warn_on_fail=True
+        ):
+            back_mean_into_fc(linears)
+        for _, linears in match_named_modules(
+            model, self.mappings.mm_proj, warn_on_fail=True
         ):
             back_mean_into_fc(linears)
 

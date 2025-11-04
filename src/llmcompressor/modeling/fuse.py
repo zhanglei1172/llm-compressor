@@ -3,6 +3,7 @@ from typing import Iterable
 import torch
 from compressed_tensors import (
     align_module_device,
+    delete_offload_parameter,
     get_execution_device,
     update_offload_parameter,
 )
@@ -31,13 +32,15 @@ def center_embeddings(embedding: torch.nn.Module):
     update_offload_parameter(embedding, "weight", new_weight)
 
 
-def back_mean_into_fc(linear: torch.nn.Linear):
+def back_mean_into_fc(linear: torch.nn.Linear | torch.nn.modules.conv._ConvNd):
     exec_device = get_execution_device(linear)
     with align_module_device(linear, exec_device):
         weight_dtype = linear.weight.dtype
         new_weight = linear.weight.to(PRECISION)
+        ori_shape = new_weight.shape
+        new_weight = new_weight.view(ori_shape[0], -1)
         new_weight = new_weight - new_weight.mean(dim=-2, keepdim=True)
-        new_weight = new_weight.to(weight_dtype)
+        new_weight = new_weight.to(weight_dtype).reshape(ori_shape)
         if hasattr(linear, "bias") and linear.bias is not None:
             new_bias = linear.bias.to(PRECISION)
             new_bias = new_bias - new_bias.mean()
@@ -86,7 +89,6 @@ def fuse_norm_linears(norm: torch.nn.Module, linears: Iterable[torch.nn.Linear])
                     PRECISION
                 ).matmul(norm_bias.to(PRECISION))
                 new_bias = new_bias.to(weight_dtype)
-                norm.register_parameter("bias", None)
 
         update_offload_parameter(linear, "weight", new_weight)
         if new_bias is not None:
@@ -94,3 +96,5 @@ def fuse_norm_linears(norm: torch.nn.Module, linears: Iterable[torch.nn.Linear])
 
     new_norm_weight = torch.ones_like(norm.weight, device="cpu")
     update_offload_parameter(norm, "weight", new_norm_weight)
+    delete_offload_parameter(norm, "bias")
+    norm.register_parameter("bias", None)

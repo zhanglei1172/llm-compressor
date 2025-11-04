@@ -20,8 +20,8 @@ from llmcompressor.pipelines.cache import IntermediatesCache
 from llmcompressor.utils import dispatch_for_generation
 
 # Select model and load it.
-REF_MODEL_ID = "/dataset/workspace/zhangl98/qwenomni-exp/omni_ostq_w_bf16/transformed_model/"
-MODEL_ID = "/dataset/workspace/lim42/models/Qwen3-Omni-30B-A3B-Instruct-Quarot/"
+REF_MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-quarot-sym-com-vit-trans"
 
 ref_model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     REF_MODEL_ID, torch_dtype="auto"
