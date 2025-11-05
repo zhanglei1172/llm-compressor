@@ -79,10 +79,7 @@ dtype = model.dtype
 replace_audio_embedding(model.thinker.audio_tower)
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-_positional_embedding = model.thinker.audio_tower.positional_embedding
-# _positional_embedding.register_buffer("positional_embedding", _positional_embedding.positional_embedding)
-# model.thinker.audio_tower.positional_embedding = torch.nn.Embedding(*_positional_embedding.positional_embedding.shape, dtype=dtype)
-# model.thinker.audio_tower.positional_embedding.weight.data = _positional_embedding.positional_embedding
+
 # Select calibration dataset.
 DATASET_ID = "MLCommons/peoples_speech"
 DATASET_ID = "/dataset/workspace/zhangl98/dataset/peoples_speech/test"
@@ -291,7 +288,7 @@ sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
 # Confirm generations of the quantized model look sane.
 print("\n\n")
 print("========== SAMPLE GENERATION ==============")
-model.thinker.audio_tower.positional_embedding = _positional_embedding
+
 dispatch_for_generation(model)
 messages = [
     {

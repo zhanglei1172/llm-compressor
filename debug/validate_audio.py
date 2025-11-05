@@ -37,9 +37,30 @@ dtype = model.dtype
 model_device = torch.device("cuda")
 processor = AutoProcessor.from_pretrained(REF_MODEL_ID, trust_remote_code=True)
 
-replace_audio_embedding(model.thinker.audio_tower)
+# replace_audio_embedding(model.thinker.audio_tower)
 replace_rmsnorm(model.thinker.audio_tower)
-audio_wrap_funcs = get_audio_wrap_functions()
+from compressed_tensors.transform.utils.hadamard import deterministic_hadamard_matrix
+
+tensor = model.thinker.audio_tower.positional_embedding.positional_embedding
+ori_device = tensor.device
+ori_shape = tensor.shape
+
+Q1 = deterministic_hadamard_matrix(64, torch.float64, model_device)
+model.thinker.audio_tower.positional_embedding.positional_embedding = (
+    (
+        (
+            (tensor - tensor.mean(-1, keepdim=True))
+            .to(dtype=Q1.dtype, device=model_device)
+            .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
+            @ Q1
+        )
+        / Q1.shape[0] ** 0.5
+    )
+    .to(dtype=dtype, device=ori_device)
+    .reshape(ori_shape)
+)
+
+# audio_wrap_funcs = get_audio_wrap_functions()
 
 # Select calibration dataset.
 DATASET_ID = "/dataset/workspace/zhangl98/dataset/peoples_speech/test"
@@ -154,13 +175,13 @@ activations = IntermediatesCache.from_dataloader(dataloader, model_device)
 
 with contextlib.ExitStack() as stack:
     stack.enter_context(torch.no_grad())
-    stack.enter_context(
-        helpers.patch_attr(
-            model.thinker.audio_tower,
-            "forward",
-            audio_wrap_funcs["forward"].__get__(model.thinker.audio_tower),
-        )
-    )
+    # stack.enter_context(
+    #     helpers.patch_attr(
+    #         model.thinker.audio_tower,
+    #         "forward",
+    #         audio_wrap_funcs["forward"].__get__(model.thinker.audio_tower),
+    #     )
+    # )
     _rets = []
     _ref_rets = []
     for batch_idx in tqdm(range(len(dataloader))):
