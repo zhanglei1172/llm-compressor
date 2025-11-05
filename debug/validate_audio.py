@@ -45,16 +45,30 @@ tensor = model.thinker.audio_tower.positional_embedding.positional_embedding
 ori_device = tensor.device
 ori_shape = tensor.shape
 
-Q1 = deterministic_hadamard_matrix(64, torch.float64, model_device)
+# Q1 = deterministic_hadamard_matrix(64, torch.float64, model_device)
+# model.thinker.audio_tower.positional_embedding.positional_embedding = (
+#     (
+#         (
+#             (tensor - tensor.mean(-1, keepdim=True))
+#             .to(dtype=Q1.dtype, device=model_device)
+#             .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
+#             @ Q1
+#         )
+#         / Q1.shape[0] ** 0.5
+#     )
+#     .to(dtype=dtype, device=ori_device)
+#     .reshape(ori_shape)
+# )
+
+Q1 = torch.load(f"{MODEL_ID}/transform_state_dict.pt")[
+    "audio_tower.positional_embedding.R1_weight_output"
+]["weight"].to(dtype=torch.float64, device=model_device)
 model.thinker.audio_tower.positional_embedding.positional_embedding = (
     (
-        (
-            (tensor - tensor.mean(-1, keepdim=True))
-            .to(dtype=Q1.dtype, device=model_device)
-            .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
-            @ Q1
-        )
-        / Q1.shape[0] ** 0.5
+        (tensor - tensor.mean(-1, keepdim=True))
+        .to(dtype=Q1.dtype, device=model_device)
+        .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
+        @ Q1
     )
     .to(dtype=dtype, device=ori_device)
     .reshape(ori_shape)

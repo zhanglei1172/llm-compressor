@@ -259,7 +259,7 @@ _h = set()
 transform_state_dict = OrderedDict()
 from compressed_tensors.transform.factory.base import TransformBase
 
-for name, module in model.thinker.visual.named_modules():
+for name, module in model.thinker.named_modules():
     if isinstance(module, TransformBase):
         if module in _h or id(module.scheme) in _h:
             continue
@@ -267,6 +267,13 @@ for name, module in model.thinker.visual.named_modules():
         print(f"{name}: {module}")
         transform_state_dict.update({name: module.state_dict()})
 
+to_removes = []
+for name, module in model.thinker.named_modules():
+    for child_name, child_module in module.named_children():
+        if isinstance(child_module, TransformBase):
+            to_removes.append((module, child_name))
+for module, child_name in to_removes:
+    delattr(module, child_name)
 # Confirm generations of the quantized model look sane.
 print("\n\n")
 print("========== SAMPLE GENERATION ==============")

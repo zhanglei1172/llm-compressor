@@ -66,7 +66,7 @@ recipe = "examples/qwen3_omni_configs/audio/quarot.yaml"
 # recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
 flag = "quarot"
 # flag = "awq"
-fq = False
+fq = True
 #################### configurations ####################
 
 # Select model and load it.
@@ -88,7 +88,7 @@ DATASET_SPLIT = "test"
 
 # Select number of samples. 256 samples is a good place to start.
 # Increasing the number of samples can improve accuracy.
-NUM_CALIBRATION_SAMPLES = 512
+NUM_CALIBRATION_SAMPLES = 1
 MAX_SEQUENCE_LENGTH = 2048
 
 # Load dataset and preprocess.
@@ -291,13 +291,21 @@ _h = set()
 transform_state_dict = OrderedDict()
 from compressed_tensors.transform.factory.base import TransformBase
 
-for name, module in model.thinker.visual.named_modules():
+for name, module in model.thinker.named_modules():
     if isinstance(module, TransformBase):
         if module in _h or id(module.scheme) in _h:
             continue
         _h.add((module if module.scheme.block_wise else id(module.scheme)))
         print(f"{name}: {module}")
         transform_state_dict.update({name: module.state_dict()})
+
+to_removes = []
+for name, module in model.thinker.named_modules():
+    for child_name, child_module in module.named_children():
+        if isinstance(child_module, TransformBase):
+            to_removes.append((module, child_name))
+for module, child_name in to_removes:
+    delattr(module, child_name)
 
 # Confirm generations of the quantized model look sane.
 print("\n\n")
