@@ -96,5 +96,6 @@ def fuse_norm_linears(norm: torch.nn.Module, linears: Iterable[torch.nn.Linear])
 
     new_norm_weight = torch.ones_like(norm.weight, device="cpu")
     update_offload_parameter(norm, "weight", new_norm_weight)
-    delete_offload_parameter(norm, "bias")
-    norm.register_parameter("bias", None)
+    if hasattr(norm, "bias") and norm.bias is not None:
+        delete_offload_parameter(norm, "bias")
+        norm.register_parameter("bias", None)

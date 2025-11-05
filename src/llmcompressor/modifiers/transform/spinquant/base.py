@@ -19,7 +19,10 @@ from llmcompressor.modeling import (
     center_embeddings,
     fuse_norm_linears,
 )
-from llmcompressor.modeling.replace import replace_ln_to_rmsnorm
+from llmcompressor.modeling.replace import (
+    replace_ln_to_rmsnorm,
+    replace_parametrizations_to_weights,
+)
 from llmcompressor.modifiers import Modifier
 from llmcompressor.utils.pytorch.module import get_module_name
 
@@ -96,7 +99,11 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
     randomize: bool = Field(default=False)
     learnable: bool = Field(default=False)
     precision: TorchDtype = Field(default=torch.float64)
-    transform_block_size: Optional[int] = Field(default=None)
+    # transform_block_size: Optional[int] = Field(default=None)
+    transform_block_size_R1: Optional[int] = Field(default=None, repr=False)
+    transform_block_size_R2: Optional[int] = Field(default=None, repr=False)
+    transform_block_size_R3: Optional[int] = Field(default=None, repr=False)
+    transform_block_size_R4: Optional[int] = Field(default=None, repr=False)
 
     # norm mappings separate from spinquant mappings to allow users to
     # override spinquant mappings with transform_config without overriding norms
@@ -115,7 +122,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
     # also included in recipe serialization
     transform_config: Optional[TransformConfig] = Field(default=None, repr=False)
 
-    @field_validator("randomize", "learnable", mode="before")
+    @field_validator("randomize", mode="before")
     def validate_not_implemented(cls, value, info: ValidationInfo):
         if value:
             raise NotImplementedError(f"{info.field_name} is not supported as of now")
@@ -176,6 +183,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
                 self.on_end(state, None)
 
     def on_end(self, state: State, event: Event, **kwargs):
+        self._fold_transforms_into_weights(state.model)
         self.ended_ = True
 
     def on_finalize(self, state: State, **kwargs) -> bool:
@@ -184,6 +192,9 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
 
         return True
 
+    def _fold_transforms_into_weights(self, model: PreTrainedModel):
+        replace_parametrizations_to_weights(model)
+
     def _center_embeddings(self, model: PreTrainedModel):
         for _, embedding in match_named_modules(
             model, [self.mappings.embedding], warn_on_fail=True
@@ -191,9 +202,9 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
             center_embeddings(embedding)
 
     def _bake_mean_into_fc(self, model: PreTrainedModel):
-        '''
+        """
         center the weights of Linear layers(prev-op of layernorm) to have zero-mean rows
-        '''
+        """
         for _, linears in match_named_modules(
             model, [self.mappings.attn_o], warn_on_fail=True
         ):
@@ -222,7 +233,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
             randomize=self.randomize,
             requires_grad=self.learnable,
             precision=self.precision,
-            head_dim=self.transform_block_size,
+            head_dim=self.transform_block_size_R1,
             apply=[
                 TransformArgs(
                     targets=[
@@ -257,16 +268,17 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
         else:
             raise NotImplementedError()
 
-        if self.transform_block_size:
-            if head_dim % self.transform_block_size != 0:
+        if self.transform_block_size_R2:
+            if head_dim % self.transform_block_size_R2 != 0:
                 raise ValueError(
-                    f"transform_block_size {self.transform_block_size} must be set "
+                    f"transform_block_size {self.transform_block_size_R2} must be set "
                     f"such that model's head_dim {head_dim} is evenly divisible by it"
                 )
-            head_dim = self.transform_block_size
+            head_dim = self.transform_block_size_R2
 
         return TransformScheme(
             type=self.transform_type,
+            block_wise=True,
             randomize=self.randomize,
             requires_grad=self.learnable,
             precision=self.precision,
@@ -289,10 +301,11 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
     def _create_r4_scheme(self) -> TransformScheme:
         return TransformScheme(
             type=self.transform_type,
+            block_wise=True,
             randomize=self.randomize,
             requires_grad=self.learnable,
             precision=self.precision,
-            head_dim=self.transform_block_size,
+            head_dim=self.transform_block_size_R4,
             apply=[
                 TransformArgs(
                     targets=[*self.mappings.mlp_out],

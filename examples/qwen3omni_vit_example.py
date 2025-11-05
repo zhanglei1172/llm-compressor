@@ -207,6 +207,19 @@ with contextlib.ExitStack() as stack:
         # pipeline="basic",
     )
 
+from collections import OrderedDict
+
+_h = set()
+transform_state_dict = OrderedDict()
+from compressed_tensors.transform.factory.base import TransformBase
+
+for name, module in model.thinker.visual.named_modules():
+    if isinstance(module, TransformBase):
+        if module in _h or id(module.scheme) in _h:
+            continue
+        _h.add((module if module.scheme.block_wise else id(module.scheme)))
+        print(f"{name}: {module}")
+        transform_state_dict.update({name: module.state_dict()})
 
 # Confirm generations of the quantized model look sane.
 print("\n\n")
@@ -313,5 +326,5 @@ replace_vit_attention_inv(model.thinker.visual)
 
 model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
 processor.save_pretrained(SAVE_DIR)
-
+torch.save(transform_state_dict, f"{SAVE_DIR}/transform_state_dict.pt")
 print(SAVE_DIR)
