@@ -62,15 +62,16 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 ]
 
 #################### configurations ####################
-recipe = "examples/qwen3_omni_configs/audio/quarot.yaml"
+recipe = "examples/qwen3_omni_configs/audio/mse_w8a8.yaml"
 # recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
-flag = "quarot"
+flag = "mse_w8a8"
 # flag = "awq"
-fq = True
+fq = False
+realq = True
 #################### configurations ####################
 
 # Select model and load it.
-MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-quarot-sym-com-audio-trans/"
 
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
@@ -374,8 +375,18 @@ SAVE_DIR = (
     "/tmp/"
     + MODEL_ID.rstrip("/").split("/")[-1]
     + f"-{flag}-sym-com-audio"
-    + ("-fq" if fq else "-trans")
+    + ("-realq" if realq else ("-fq" if fq else "-trans"))
 )
+from llmcompressor.transformers.compression.compressed_tensors_utils import (
+    modify_save_pretrained,
+)
+
+if realq:
+    modify_save_pretrained(model)
+    model.save_pretrained(SAVE_DIR, save_compressed=True)
+    processor.save_pretrained(SAVE_DIR)
+    print(SAVE_DIR)
+    exit(0)
 # model.save_pretrained(SAVE_DIR+"-trans") # trans
 # processor.save_pretrained(SAVE_DIR+"-trans")
 # modify_save_pretrained(model)

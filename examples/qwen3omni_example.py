@@ -71,17 +71,17 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
 #################### configurations ####################
 calibrate_moe_context = True
 # Select model and load it.
-pretrain = "origin"
-recipe = "examples/qwen3_omni_configs/text/quarot.yaml"
-flag = "quarot"
+pretrain = "ostq"
+recipe = "examples/qwen3_omni_configs/text/mse_w8a8.yaml"
+flag = "mse_w8a8"
 fq = False
-realq = False
-NUM_CALIBRATION_SAMPLES = 1
+realq = True
+NUM_CALIBRATION_SAMPLES = 256
 #################### configurations ####################
 
 
 if pretrain == "ostq":
-    MODEL_ID = "/code/omni_ostq_w_bf16/transformed_model/"
+    MODEL_ID = "/code/omni_ostq_wa_bf16/transformed_model/"
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
