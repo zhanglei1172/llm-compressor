@@ -303,7 +303,7 @@ def get_audio_wrap_functions():
 
 def replace_audio_embedding(module: torch.nn.Module):
     for name, child in module.named_children():
-        if isinstance(child, SinusoidsPositionEmbedding):
+        if child.__class__.__name__ == "SinusoidsPositionEmbedding":
             replaced = torch.nn.Embedding(
                 *child.positional_embedding.shape,
                 dtype=child.positional_embedding.dtype,

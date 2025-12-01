@@ -24,6 +24,7 @@ from llmcompressor import oneshot
 from llmcompressor.modeling.qwen3_omni_moe import (
     replace_vit_attention,
     replace_vit_attention_inv,
+    replace_rmsnorm,
 )
 from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
@@ -78,6 +79,7 @@ model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
 )
 dtype = model.dtype
+replace_rmsnorm(model.thinker.visual)
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 

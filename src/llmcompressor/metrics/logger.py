@@ -327,7 +327,7 @@ class PythonLogger(LambdaLogger):
         super().__init__(
             lambda_func=self._log_lambda,
             name=name,
-            enabled=enabled,
+            enabled=enabled and os.environ.get("LOCAL_RANK", "0") == "0",
         )
 
     def _create_default_logger(self) -> None:

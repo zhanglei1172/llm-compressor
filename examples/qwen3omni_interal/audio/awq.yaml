@@ -1,0 +1,32 @@
+quant_stage:
+  quant_modifiers:
+    # SmoothQuantModifier:
+    #   smoothing_strength: 0.8
+    AWQModifier:
+      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:conv.*", 're:proj[\d].*', "re:positional_embedding*"]
+      mappings:
+        -
+          smooth_layer: "re:.*self_attn_layer_norm$"
+          balance_layers: ["re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$"]
+        -
+          smooth_layer: "re:.*v_proj$"
+          balance_layers: ["re:.*out_proj$"]
+        - 
+          smooth_layer: "re:.*final_layer_norm$"
+          balance_layers: ["re:.*fc1$"]
+      config_groups:
+        group_0:
+          weights:
+            observer: mse
+            observer_kwargs:
+              maxshrink: 0.1
+              patience: 10
+              averaging_constant: 0.05
+              grid: 128.0
+              norm: 2.0
+            num_bits: 4
+            type: int
+            symmetric: true
+            strategy: channel
+          # input_activations: {num_bits: 8, type: int, symmetric: true, strategy: token, dynamic: true}
+          targets: [Linear]

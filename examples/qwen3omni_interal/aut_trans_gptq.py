@@ -1,6 +1,10 @@
 import contextlib
 import copy
 
+# from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+import os
+from collections import OrderedDict
+
 import torch
 from accelerate.hooks import remove_hook_from_module
 from compressed_tensors import get_execution_device
@@ -14,10 +18,13 @@ from compressed_tensors.quantization import (
 from datasets import load_dataset
 from qwen_omni_utils import process_mm_info
 from qwen_vl_utils import process_vision_info
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["PYTHONPATH"] = os.path.dirname(os.path.abspath(__file__))
+from qwen3_omni_moe_utils.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
 )
+from qwen3_omni_moe_utils.processing_qwen3_omni_moe import Qwen3OmniMoeProcessor
 
 from llmcompressor import oneshot
 from llmcompressor.modeling.qwen3_omni_moe import (
@@ -64,41 +71,43 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 
 #################### configurations ####################
 # recipe = "examples/qwen3_omni_configs/audio/mse.yaml"
-recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
+recipe = "examples/qwen3omni_interal/audio/gptq.yaml"
 # flag = "mse"
-flag = "awq"
+flag = "gptq"
 fq = True
 realq = False
 #################### configurations ####################
 
 # Select model and load it.
-MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+MODEL_ID = "/tmp/Qwen3-Omni-Thinking-quarot-sym-com-audio-trans"
 
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
 )
 dtype = model.dtype
 replace_audio_embedding(model.thinker.audio_tower)
-# replace_rmsnorm(model.thinker.audio_tower)
-# tensor = model.thinker.audio_tower.positional_embedding.weight
-# ori_device = tensor.device
-# ori_shape = tensor.shape
-# model_device = tensor.device
-# Q1 = torch.load(f"{MODEL_ID}/transform_state_dict.pt")[
-#     "audio_tower.positional_embedding.R1_weight_output"
-# ]["weight"].to(dtype=torch.float64, device=model_device)
-# model.thinker.audio_tower.positional_embedding.weight.data = (
-#     (
-#         (tensor - tensor.mean(-1, keepdim=True))
-#         .to(dtype=Q1.dtype, device=model_device)
-#         .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
-#         @ Q1
-#     )
-#     .to(dtype=dtype, device=ori_device)
-#     .reshape(ori_shape)
-# )
+replace_rmsnorm(model.thinker.audio_tower)
+tensor = model.thinker.audio_tower.positional_embedding.weight
+ori_device = tensor.device
+ori_shape = tensor.shape
+model_device = tensor.device
+transform_state_dict = OrderedDict()
+transform_state_dict = torch.load(f"{MODEL_ID}/transform_state_dict.pt")
+Q1 = transform_state_dict[
+    "audio_tower.positional_embedding.R1_weight_output"
+]["weight"].to(dtype=torch.float64, device=model_device)
+model.thinker.audio_tower.positional_embedding.weight.data = (
+    (
+        (tensor - tensor.mean(-1, keepdim=True))
+        .to(dtype=Q1.dtype, device=model_device)
+        .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
+        @ Q1
+    )
+    .to(dtype=dtype, device=ori_device)
+    .reshape(ori_shape)
+)
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
-processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+processor = Qwen3OmniMoeProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 
 # Select calibration dataset.
 DATASET_ID = "MLCommons/peoples_speech"
@@ -108,7 +117,7 @@ DATASET_SPLIT = "test"
 
 # Select number of samples. 256 samples is a good place to start.
 # Increasing the number of samples can improve accuracy.
-NUM_CALIBRATION_SAMPLES = 1
+NUM_CALIBRATION_SAMPLES = 256
 MAX_SEQUENCE_LENGTH = 2048
 
 # Load dataset and preprocess.
@@ -226,11 +235,11 @@ def data_collator(batch):
 
 import sys
 
-audio_wrap_funcs = get_audio_wrap_functions()
+# audio_wrap_funcs = get_audio_wrap_functions()
 
-sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
-    audio_wrap_funcs
-)
+# sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
+#     audio_wrap_funcs
+# )
 
 _tmp_config = copy.deepcopy(model.thinker.audio_tower.config)
 _tmp_config.update(
@@ -257,13 +266,13 @@ def my_init(self, ancestors, offloaded):
 
 with contextlib.ExitStack() as stack:
     stack.enter_context(helpers.patch_attr(SequentialTracer, "__init__", my_init))
-    stack.enter_context(
-        helpers.patch_attr(
-            model.thinker.audio_tower,
-            "forward",
-            audio_wrap_funcs["forward"].__get__(model.thinker.audio_tower),
-        )
-    )
+    # stack.enter_context(
+    #     helpers.patch_attr(
+    #         model.thinker.audio_tower,
+    #         "forward",
+    #         audio_wrap_funcs["forward"].__get__(model.thinker.audio_tower),
+    #     )
+    # )
     stack.enter_context(
         helpers.patch_attr(model.thinker.audio_tower, "config", _tmp_config)
     )
@@ -299,16 +308,15 @@ with contextlib.ExitStack() as stack:
         sequential_targets=["Qwen3OmniMoeAudioEncoderLayer"],
     )
 
-sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
-    {
-        "forward": model.thinker.audio_tower.forward,
-    }
-)
+# sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
+#     {
+#         "forward": model.thinker.audio_tower.forward,
+#     }
+# )
 
-from collections import OrderedDict
 
 _h = set()
-transform_state_dict = OrderedDict()
+# transform_state_dict = OrderedDict()
 from compressed_tensors.transform.factory.base import TransformBase
 
 for name, module in model.thinker.named_modules():

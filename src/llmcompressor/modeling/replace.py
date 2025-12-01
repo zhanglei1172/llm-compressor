@@ -52,6 +52,7 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
         ]
 
 
+@torch.no_grad()
 def replace_parametrizations_to_weights(model: torch.nn.Module):
     """
     Fold the parametrizations into the weight of the module.
