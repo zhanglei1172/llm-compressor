@@ -115,6 +115,7 @@ flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 256
 #################### configurations ####################
 
+model_dtype = torch.bfloat16
 
 if pretrain == "ostq":
     MODEL_ID = "/code/omni_ostq_wa_bf16/transformed_model/"
@@ -412,6 +413,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
                         pos += 1
 
         batch["labels"] = labels  # batch["input_ids"]
+        batch['input_features'] = batch['input_ids'].to(dtype=model_dtype)
         return batch
 
 
