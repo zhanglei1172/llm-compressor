@@ -33,6 +33,7 @@ from transformers.trainer_utils import (
 from llmcompressor.utils.pytorch.module import (
     patch_module_to_cuda,
     patch_tensor_to_cuda,
+    tensor_to_cuda,
 )
 
 from .train_utils import SGDG
@@ -47,38 +48,19 @@ def pt_fsdp_state_dict(model: torch.nn.Module):
 class MyTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         teacher_model = kwargs.pop("teacher_model", None)
+        self.weight_tied_name_map = kwargs.pop("weight_tied_name_map", {})
         super().__init__(*args, **kwargs)
         if (
             hasattr(self.accelerator.state, "fsdp_plugin")
             and self.accelerator.state.fsdp_plugin is not None
         ):
             model: nn.Module = self.model
-            share_weight_map = {}  # weight: new_param
             ignored_modules = list()
-            import geoopt
-            from geoopt.manifolds import EuclideanStiefel, Stiefel
-
-            with patch_tensor_to_cuda(torch.Tensor):
-                for name, m in model.named_modules():
+            torch.distributed.barrier()
+            with patch_module_to_cuda(torch.nn.Module):
+                for m in model.modules():
                     if isinstance(m, (TransformBase)):
                         ignored_modules.append(m)
-                        for param_name, param in m.named_parameters():
-                            if id(param) not in share_weight_map:
-                                new_param = param.cuda()
-                                if len(param.size()) != 1:
-                                    new_param = geoopt.ManifoldParameter(
-                                        new_param, manifold=Stiefel()
-                                    )
-
-                                m.register_parameter(
-                                    param_name,
-                                    new_param,
-                                )
-                                share_weight_map[id(param)] = new_param
-                            else:
-                                m.register_parameter(
-                                    param_name, share_weight_map[id(param)]
-                                )
                         m.cuda()
 
             self.accelerator.state.fsdp_plugin.ignored_modules = ignored_modules
@@ -217,7 +199,30 @@ class MyTrainer(Trainer):
         model.teacher._is_root = False
         return outputs
 
+    @classmethod
+    def register_tied_parameters(cls, model, weight_tied_name_map):
+        for names, tied_names in weight_tied_name_map.items():
+            if names != tied_names:
+                (module_name, param_name) = names
+                module = model.get_submodule(module_name)
+                module.register_parameter(
+                    param_name,
+                    model.get_parameter(f"{tied_names[0]}.{tied_names[1]}"),
+                )
+
     def create_optimizer_and_scheduler(self, num_training_steps: int):
+        import geoopt
+        from geoopt.manifolds import EuclideanStiefel, Stiefel
+
+        for m in self.accelerator.state.fsdp_plugin.ignored_modules:
+            for name, param in m.named_parameters():
+                if param.requires_grad and len(param.size()) > 1:
+                    m.register_parameter(
+                        name, geoopt.ManifoldParameter(param.data, manifold=Stiefel())
+                    )
+
+        self.register_tied_parameters(self.model, self.weight_tied_name_map)
+
         args = self.args
         params_rotate = []
         params_smooth = []
@@ -279,4 +284,3 @@ class MyTrainer(Trainer):
             return state_dict
         else:
             return self.model.state_dict()
-

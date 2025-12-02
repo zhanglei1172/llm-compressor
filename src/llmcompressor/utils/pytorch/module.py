@@ -423,8 +423,9 @@ def get_non_persistent_buffers(
 
     return non_persistent_buffers_set
 
+
 @contextlib.contextmanager
-def patch_tensor_to_cuda(base: object):
+def patch_tensor_to_cuda(base: object = torch.Tensor):
     """
     Patch the value of an object attribute. Original value is restored upon exit
 
@@ -461,25 +462,24 @@ def tensor_to_cuda(self: torch.Tensor, device="cuda"):
     Move a module to CUDA
     :param module: module to move
     """
-    if not device:
-        device = "cuda"
+    if device == "cuda":
+        device = f"cuda:{torch.cuda.current_device()}"
     if not isinstance(self, torch.Tensor):
         return self.to(device)
     src_rank = 0
-    device = device
+
     rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
 
     if rank == src_rank:
-        _tensor = self.to(device)
-        torch.distributed.broadcast(_tensor, src=src_rank)
+        self = self.to(device)
     else:
-        _tensor = torch.empty_like(self, device=device)
-        torch.distributed.broadcast(_tensor, src=src_rank)
+        self = torch.empty_like(self, device=device)
+    torch.distributed.broadcast(self, src=src_rank)
+    return self
 
-    return _tensor
 
 @contextlib.contextmanager
-def patch_module_to_cuda(base: object):
+def patch_module_to_cuda(base: object = torch.nn.Module):
     """
     Patch the value of an object attribute. Original value is restored upon exit
 
@@ -511,7 +511,7 @@ def patch_module_to_cuda(base: object):
 
 
 @torch.no_grad()
-def module_to_cuda(self: torch.nn.Module):
+def module_to_cuda(self: torch.nn.Module, device="cuda"):
     """
     Move a module to CUDA
     :param module: module to move
@@ -519,7 +519,8 @@ def module_to_cuda(self: torch.nn.Module):
     if not isinstance(self, torch.nn.Module):
         return self.to("cuda")
     src_rank = 0
-    device = "cuda"
+    if not device:
+        device = "cuda"
     rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
 
     non_persistent_buffer_fqns = get_non_persistent_buffers(
@@ -564,3 +565,75 @@ def module_to_cuda(self: torch.nn.Module):
         )
 
     return self
+
+
+class UnionFind:
+    """并查集数据结构，用于管理共享参数的映射关系"""
+
+    def __init__(self):
+        self.parent = {}  # 存储每个元素的父节点
+        self.rank = {}  # 存储每个集合的秩（用于优化）
+
+    def find(self, x):
+        """查找元素 x 的根节点（代表元素），路径压缩优化"""
+        if x not in self.parent:
+            self.parent[x] = x
+            self.rank[x] = 0
+            return x
+
+        if self.parent[x] != x:
+            # 路径压缩：将查找路径上的所有节点直接连接到根节点
+            self.parent[x] = self.find(self.parent[x])
+
+        return self.parent[x]
+
+    def union(self, x, y):
+        """合并 x 和 y 所在的集合"""
+        root_x = self.find(x)
+        root_y = self.find(y)
+
+        if root_x == root_y:
+            return  # 已在同一集合
+
+        # 按秩合并：将秩小的树连接到秩大的树下
+        if self.rank[root_x] < self.rank[root_y]:
+            self.parent[root_x] = root_y
+        elif self.rank[root_x] > self.rank[root_y]:
+            self.parent[root_y] = root_x
+        else:
+            self.parent[root_y] = root_x
+            self.rank[root_x] += 1
+
+
+def build_weight_tied_map_with_unionfind(model: torch.nn.Module):
+    weight_tied_map = {}
+    weight_tied_name_map = {}
+    uf = UnionFind()
+    param_id_to_first_name = {}
+
+    # 第一遍：收集所有参数
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            if not param.requires_grad:
+                continue
+
+            param_id = id(param)
+
+            if param_id not in param_id_to_first_name:
+                # 第一次遇到这个参数
+                param_id_to_first_name[param_id] = (module_name, param_name)
+                weight_tied_map[param_id] = param
+            else:
+                # 共享参数：绑定到第一个参数
+                first_name = param_id_to_first_name[param_id]
+                uf.union(first_name, (module_name, param_name))
+                param.data = weight_tied_map[param_id].data
+
+            weight_tied_name_map[(module_name, param_name)] = param_id
+
+    # 构建规范名称映射
+    canonical_name_map = {}
+    for name in weight_tied_name_map.keys():
+        canonical_name_map[name] = uf.find(name)
+
+    return canonical_name_map

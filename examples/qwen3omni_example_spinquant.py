@@ -1,11 +1,14 @@
 import argparse
+import base64
 import contextlib
 import copy
 import datetime
 import os
+from io import BytesIO
 from typing import Mapping, Optional, Union
 from unittest.mock import patch
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -24,6 +27,7 @@ from compressed_tensors.quantization import (
 from datasets import load_dataset, load_from_disk
 from easydict import EasyDict
 from loguru import logger
+from PIL import Image
 from qwen_omni_utils import process_mm_info
 from qwen_vl_utils import process_vision_info
 from torch.distributed.fsdp import (
@@ -53,7 +57,10 @@ from llmcompressor.recipe import Recipe
 from llmcompressor.train.fsdp_trainer import MyTrainer
 from llmcompressor.train.train_utils import LLMCTrainingArguments, TeacherModel
 from llmcompressor.utils import dispatch_for_generation, helpers
-from llmcompressor.utils.pytorch.module import patch_module_non_persistent_buffers
+from llmcompressor.utils.pytorch.module import (
+    build_weight_tied_map_with_unionfind,
+    patch_module_non_persistent_buffers,
+)
 
 torch.fx.experimental._config.meta_nonzero_assume_all_nonzero = True
 # awq_mappings.AWQ_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = awq_mappings._moe_default_mappings
@@ -116,6 +123,59 @@ else:
 if calibrate_moe_context:
     flag += "-calmoe"
 
+DATASET_ID = "lmms-lab/flickr30k"
+DATASET_SPLIT = "test[:256]"
+# DATASET_SPLIT = "test"
+MAX_SEQUENCE_LENGTH = 2048
+# Load dataset and preprocess.
+# ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
+ds = load_dataset(DATASET_ID, split=DATASET_SPLIT)
+ds = ds.shuffle(seed=42)
+
+
+def encode_base64_img(img) -> str:
+    with BytesIO() as buffer:
+        img.save(buffer, format="PNG")
+        data = buffer.getvalue()
+
+    return base64.b64encode(data).decode("utf-8")
+
+
+def format_as_messages(example, prompt: str | None = None):
+    """Format single example into messages format for TRL."""
+    if not prompt:
+        prompt = "What does the image show?"
+    labels = example["caption"]
+    response = labels[0]
+    # example["image"] is PIL image, convert it to base64
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": f'data:image;base64,{encode_base64_img(example["image"])}',
+                },
+            ],
+        },
+        # {
+        #     "role": "assistant",
+        #     "content": [{"type": "text", "text": response}],
+        # },
+    ]
+
+    return {
+        "messages": messages,
+    }
+
+
+ds = ds.map(
+    format_as_messages,
+    remove_columns=ds.column_names,
+    # num_proc=6,
+    fn_kwargs={"prompt": "What does the image show?"},
+)
+
 
 def pre_compression_thinker(model):
     # session = active_session()
@@ -151,25 +211,39 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
         # assert self.assistant_end_tokens == [151645, 198]
 
     def __call__(self, examples):
+        # conversations = [
+        #     [
+        #         {
+        #             "role": "user",
+        #             "content": [
+        #                 {
+        #                     "type": "image",
+        #                     "image": example["image"],
+        #                 },
+        #                 {
+        #                     "type": "text",
+        #                     # "text": example["text"].capitalize(),
+        #                     "text": "What does the image show?",
+        #                 },
+        #             ],
+        #         }
+        #     ]
+        #     for example in examples
+        # ]
         conversations = [
             [
                 {
-                    "role": "user",
+                    "role": turn["role"],
                     "content": [
-                        {
-                            "type": "image",
-                            "image": example["image"],
-                        },
-                        {
-                            "type": "text",
-                            # "text": example["text"].capitalize(),
-                            "text": "What does the image show?",
-                        },
+                        {k: v for k, v in content.items() if v is not None}
+                        for content in turn["content"]
                     ],
                 }
+                for turn in example["messages"]
             ]
             for example in examples
         ]
+        # conversations = [example["messages"] for example in examples]
         text = self.processor.apply_chat_template(
             conversations, add_generation_prompt=True, tokenize=False
         )
@@ -233,7 +307,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
                     else:
                         pos += 1
 
-        batch["labels"] = labels
+        batch["labels"] = batch["input_ids"]
         return batch
 
 
@@ -257,6 +331,7 @@ def fsdp_main(model, config):
     for name, param in model.named_parameters():
         if param.requires_grad and name.endswith("bias"):
             param.requires_grad = False
+    weight_tied_name_map = build_weight_tied_map_with_unionfind(model.thinker)
 
     state_dict = model.thinker.state_dict()
     model.thinker.to("meta")
@@ -265,23 +340,10 @@ def fsdp_main(model, config):
         model_to_train.load_state_dict(state_dict, assign=True)
     del state_dict
 
-    DATASET_ID = "lmms-lab/flickr30k"
-    DATASET_SPLIT = "test[:256]"
-    # DATASET_SPLIT = "test"
-    MAX_SEQUENCE_LENGTH = 2048
-    # Select number of samples. 256 samples is a good place to start.
-    # Increasing the number of samples can improve accuracy.
-    # NUM_CALIBRATION_SAMPLES = 256
-    MAX_SEQUENCE_LENGTH = 2048
-
-    # Load dataset and preprocess.
-    # ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
-    ds = load_dataset(DATASET_ID, split=DATASET_SPLIT)
-    ds = ds.shuffle(seed=42)
     # fsdp
     train_processor = AutoProcessor.from_pretrained(
         pretrained_model_name_or_path=MODEL_ID,
-        model_max_length=config.seq_len,
+        model_max_length=MAX_SEQUENCE_LENGTH,
         padding_side="right",
         use_fast=True,
         add_eos_token=False,
@@ -314,14 +376,20 @@ def fsdp_main(model, config):
         # optimizers=(optimizer, None),
         # optimizers=(None, None),
         # ignored_modules=ignored_modules,
+        weight_tied_name_map=weight_tied_name_map,
     )
     trainer.train()
     dist.barrier()
-    state_dict = pt_fsdp_state_dict(model_to_train)
-    if not RANK_OTHER:
-        model.thinker.load_state_dict(state_dict, assign=True)
+    save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+    with PT_FSDP.state_dict_type(
+        model_to_train, StateDictType.FULL_STATE_DICT, save_policy
+    ):
+        state_dict = trainer.model.state_dict()
+        if not RANK_OTHER:
+            model.thinker.load_state_dict(state_dict, assign=True)
+            trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
 
-
+@torch.no_grad()
 def post_compression_thinker(state, recipe_, model, processor):
     recipe_.modifiers[0].on_end(state=state, event=None)
     from collections import OrderedDict
@@ -369,9 +437,6 @@ def post_compression_thinker(state, recipe_, model, processor):
         model, recipe_.modifiers[-1].resolved_targets, recipe_.modifiers[-1].ignore
     ):
         if hasattr(module, "quantization_status"):
-            assert (
-                module.quantization_status == QuantizationStatus.FROZEN
-            ), f"{module.quantization_status}"
             quantized_name_set.add(re.sub(r"\d+", "X", _))
             scheme = getattr(module, "quantization_scheme", None)
 
