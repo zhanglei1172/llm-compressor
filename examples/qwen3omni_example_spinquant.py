@@ -9,6 +9,7 @@ from typing import Mapping, Optional, Union
 from unittest.mock import patch
 
 import numpy as np
+import soundfile as sf
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -24,7 +25,7 @@ from compressed_tensors.quantization import (
     enable_quantization,
     forward_quantize,
 )
-from datasets import load_dataset, load_from_disk
+from datasets import concatenate_datasets, load_dataset, load_from_disk
 from easydict import EasyDict
 from loguru import logger
 from PIL import Image
@@ -123,14 +124,15 @@ else:
 if calibrate_moe_context:
     flag += "-calmoe"
 
-DATASET_ID = "lmms-lab/flickr30k"
-DATASET_SPLIT = "test[:256]"
-# DATASET_SPLIT = "test"
 MAX_SEQUENCE_LENGTH = 2048
 # Load dataset and preprocess.
 # ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
-ds = load_dataset(DATASET_ID, split=DATASET_SPLIT)
-ds = ds.shuffle(seed=42)
+ds_vl = load_dataset(
+    "lmms-lab/LLaVA-OneVision-Data", "FigureQA(MathV360K)", split="train[:256]"
+)
+ds_al = load_dataset(
+    "/dataset/workspace/zhangl98/dataset/peoples_speech/test", split="test[:256]"
+)
 
 
 def encode_base64_img(img) -> str:
@@ -141,7 +143,15 @@ def encode_base64_img(img) -> str:
     return base64.b64encode(data).decode("utf-8")
 
 
-def format_as_messages(example, prompt: str | None = None):
+def encode_base64_audio(audio_array: np.ndarray, sampling_rate: int) -> str:
+    with BytesIO() as buffer:
+        sf.write(buffer, audio_array, samplerate=sampling_rate, format="WAV")
+        data = buffer.getvalue()
+
+    return base64.b64encode(data).decode("utf-8")
+
+
+def format_as_vl_messages(example, prompt: str | None = None):
     """Format single example into messages format for TRL."""
     if not prompt:
         prompt = "What does the image show?"
@@ -156,12 +166,16 @@ def format_as_messages(example, prompt: str | None = None):
                     "type": "image",
                     "image": f'data:image;base64,{encode_base64_img(example["image"])}',
                 },
+                {
+                    "type": "text",
+                    "text": prompt,
+                },
             ],
         },
-        # {
-        #     "role": "assistant",
-        #     "content": [{"type": "text", "text": response}],
-        # },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": response}],
+        },
     ]
 
     return {
@@ -169,12 +183,102 @@ def format_as_messages(example, prompt: str | None = None):
     }
 
 
-ds = ds.map(
+def format_as_messages(example):
+    role_map = {
+        "human": "user",
+        "gpt": "assistant",
+    }
+    """Format single example into messages format for TRL."""
+    # example["image"] is PIL image, convert it to base64
+    messages = []
+    for conversation in example["conversations"]:
+        message = {
+            "role": role_map[conversation["from"]],
+            "content": [],
+        }
+        content = conversation["value"]
+        if "<image>" in content:
+            parts = content.split("<image>")
+            for i, part in enumerate(parts):
+                part = part.strip()
+                if i < len(parts) - 1:
+                    message["content"].append(
+                        {
+                            "type": "image",
+                            "image": f'data:image;base64,{encode_base64_img(example["image"])}',
+                            "audio": None,
+                        }
+                    )
+                if part:
+                    message["content"].append({"type": "text", "text": part})
+        else:
+            message["content"].append({"type": "text", "text": content})
+        messages.append(message)
+
+    return {
+        "messages": messages,
+    }
+
+
+def format_as_al_messages(example, prompt: str | None = None):
+    """Format single example into messages format for TRL."""
+    if not prompt:
+        prompt = "Please transcribe the audio."
+    labels = example["text"]
+    # example["audio"]["array"] is numpy array, convert it to base64
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "audio",
+                    "audio": f'data:audio/wav;base64,{encode_base64_audio(example["audio"]["array"], example["audio"]["sampling_rate"])}',
+                    "image": None,
+                },
+                {
+                    "type": "text",
+                    "text": prompt,
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": labels.capitalize()}],
+        },
+    ]
+    return {
+        "messages": messages,
+    }
+
+
+ds_vl = ds_vl.map(
     format_as_messages,
-    remove_columns=ds.column_names,
+    remove_columns=ds_vl.column_names,
     # num_proc=6,
-    fn_kwargs={"prompt": "What does the image show?"},
+    # fn_kwargs={"prompt": "What does the image show?"},
 )
+
+ds_al = ds_al.map(
+    format_as_al_messages,
+    remove_columns=ds_al.column_names,
+    # num_proc=6,
+    fn_kwargs={"prompt": "Please transcribe the audio."},
+)
+
+from datasets import Features, Value
+target_features = Features({
+    'messages': [{
+        'content': [{
+            'audio': Value(dtype='string'),
+            'image': Value(dtype='string'),
+            'text': Value(dtype='string'),
+            'type': Value(dtype='string')
+        }],
+        'role': Value(dtype='string')
+    }]
+})
+ds = concatenate_datasets([ds_vl.cast(target_features), ds_al.cast(target_features)])
+ds = ds.shuffle(seed=42)
 
 
 def pre_compression_thinker(model):
@@ -307,7 +411,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
                     else:
                         pos += 1
 
-        batch["labels"] = batch["input_ids"]
+        batch["labels"] = labels  # batch["input_ids"]
         return batch
 
 
@@ -388,6 +492,7 @@ def fsdp_main(model, config):
         if not RANK_OTHER:
             model.thinker.load_state_dict(state_dict, assign=True)
             trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
+
 
 @torch.no_grad()
 def post_compression_thinker(state, recipe_, model, processor):
