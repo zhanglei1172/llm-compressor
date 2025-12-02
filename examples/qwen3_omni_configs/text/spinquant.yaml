@@ -1,7 +1,7 @@
 quant_stage:
   quant_modifiers:
     SpinQuantModifier:
-      rotations: ["R2"]
+      rotations: ["R1", "R2"]
       transform_block_size_R1: 2048
       learnable: True
       transform_type: "random-hadamard"
@@ -27,5 +27,23 @@ quant_stage:
             strategy: tensor
             dynamic: true
           # input_activations: {num_bits: 8, type: int, symmetric: true, strategy: token, dynamic: true}
-          targets: [Linear]
+          targets: ["re:.*up_proj$", "re:.*gate_proj$", "re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$", "re:.*o_proj$"]
+          ste: True
+        group_1:
+          weights:
+            observer: minmax
+            num_bits: 4
+            type: int
+            symmetric: true
+            strategy: channel
+            dynamic: true
+          input_activations:
+            observer: minmax
+            num_bits: 16
+            type: int
+            symmetric: true
+            strategy: tensor
+            dynamic: true
+          # input_activations: {num_bits: 8, type: int, symmetric: true, strategy: token, dynamic: true}
+          targets: ["re:.*down_proj$"]
           ste: True

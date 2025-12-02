@@ -413,7 +413,8 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
                         pos += 1
 
         batch["labels"] = labels  # batch["input_ids"]
-        batch['input_features'] = batch['input_ids'].to(dtype=model_dtype)
+        if "input_features" in batch:
+            batch['input_features'] = batch['input_features'].to(dtype=model_dtype)
         return batch
 
 
