@@ -56,10 +56,11 @@ class ReformQwen3OmniMoeVisionAttention(nn.Module):
         self.head_dim = self.dim // self.num_heads
         self.num_key_value_groups = 1  # needed for eager attention
         # self.qkv = nn.Linear(self.dim, self.dim * 3, bias=True)
-        self.q_proj = nn.Linear(self.dim, self.dim, bias=True)
-        self.k_proj = nn.Linear(self.dim, self.dim, bias=True)
-        self.v_proj = nn.Linear(self.dim, self.dim, bias=True)
-        self.proj = nn.Linear(self.dim, self.dim)
+        device = next(ori_module.parameters()).device
+        self.q_proj = nn.Linear(self.dim, self.dim, bias=True, device=device)
+        self.k_proj = nn.Linear(self.dim, self.dim, bias=True, device=device)
+        self.v_proj = nn.Linear(self.dim, self.dim, bias=True, device=device)
+        self.proj = nn.Linear(self.dim, self.dim, device=device)
         self.scaling = self.head_dim**-0.5
         self.config = ori_module.config
         self.attention_dropout = 0.0

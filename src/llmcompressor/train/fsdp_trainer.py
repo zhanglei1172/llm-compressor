@@ -1,3 +1,4 @@
+import functools
 import os
 from collections import defaultdict
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -48,6 +49,7 @@ def pt_fsdp_state_dict(model: torch.nn.Module):
 class MyTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         teacher_model = kwargs.pop("teacher_model", None)
+        ignored_modules = kwargs.pop("ignored_modules", [])
         self.weight_tied_name_map = kwargs.pop("weight_tied_name_map", {})
         super().__init__(*args, **kwargs)
         if (
@@ -55,9 +57,11 @@ class MyTrainer(Trainer):
             and self.accelerator.state.fsdp_plugin is not None
         ):
             model: nn.Module = self.model
-            ignored_modules = list()
+            # ignored_modules = list()
             torch.distributed.barrier()
             with patch_module_to_cuda(torch.nn.Module):
+                for m in ignored_modules:
+                    m.cuda()
                 for m in model.modules():
                     if isinstance(m, (TransformBase)):
                         ignored_modules.append(m)
@@ -215,12 +219,11 @@ class MyTrainer(Trainer):
         from geoopt.manifolds import EuclideanStiefel, Stiefel
 
         for m in self.accelerator.state.fsdp_plugin.ignored_modules:
-            for name, param in m.named_parameters():
+            for name, param in m.named_parameters(recurse=False):
                 if param.requires_grad and len(param.size()) > 1:
                     m.register_parameter(
                         name, geoopt.ManifoldParameter(param.data, manifold=Stiefel())
                     )
-
         self.register_tied_parameters(self.model, self.weight_tied_name_map)
 
         args = self.args

@@ -38,7 +38,7 @@ train_args:
     # fsdp_transformer_layer_cls_to_wrap: "Qwen3OmniMoeThinkerTextDecoderLayer"
     ddp_find_unused_parameters: True
     fsdp_config:
-        # activation_checkpointing: True
+        activation_checkpointing: True
         transformer_layer_cls_to_wrap: "Qwen3OmniMoeThinkerTextDecoderLayer"
         use_orig_params: True
         sync_module_states: True

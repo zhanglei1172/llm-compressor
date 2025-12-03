@@ -22,6 +22,8 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
         normalized_shape=module.normalized_shape,
         eps=module.eps,
         elementwise_affine=module.elementwise_affine,
+        device=next(module.parameters()).device,
+        dtype=next(module.parameters()).dtype
     )
 
     if hasattr(module, "_hf_hook"):
@@ -43,13 +45,14 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
 
     setattr(parent_module, attr_name, rmsnorm)
     update_offload_parameter(rmsnorm, "weight", weight)
-    if (
-        f"{rmsnorm._hf_hook.weights_map.prefix}bias"
-        in rmsnorm._hf_hook.weights_map.dataset.state_dict
-    ):
-        del rmsnorm._hf_hook.weights_map.dataset.state_dict[
+    if hasattr(module, "_hf_hook"):
+        if (
             f"{rmsnorm._hf_hook.weights_map.prefix}bias"
-        ]
+            in rmsnorm._hf_hook.weights_map.dataset.state_dict
+        ):
+            del rmsnorm._hf_hook.weights_map.dataset.state_dict[
+                f"{rmsnorm._hf_hook.weights_map.prefix}bias"
+            ]
 
 
 @torch.no_grad()

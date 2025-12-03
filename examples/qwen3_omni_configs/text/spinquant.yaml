@@ -8,7 +8,7 @@ quant_stage:
     # SmoothQuantModifier:
     #   smoothing_strength: 0.8
     QuantizationModifier:
-      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*", "re:.*mlp.*"]
+      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"]
 
       config_groups:
         group_0:
