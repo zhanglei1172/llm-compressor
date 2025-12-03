@@ -50,6 +50,7 @@ from trl.trainer.utils import (
 
 from llmcompressor import oneshot
 from llmcompressor.core.state import State
+from llmcompressor.modeling.qwen3_omni_moe import replace_vit_attention_inv
 from llmcompressor.modifiers.awq import AWQModifier
 from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform import SpinQuantModifier
@@ -169,7 +170,6 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 calibrate_moe_context = True
 # Select model and load it.
 pretrain = "ostq"
-recipe = "examples/qwen3_omni_configs/text/spinquant.yaml"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 256
 #################### configurations ####################
@@ -425,6 +425,136 @@ def pre_compression_thinker_aut(model):
     return state, recipe_, model
 
 
+def pre_compression_thinker_text(model):
+    # session = active_session()
+    # session.reset()
+    state = State()
+    state.update(
+        model=model.thinker,
+    )
+    recipe_ = [
+        SpinQuantModifier(
+            backe_mean=False,
+            learnable=True,
+            rotations=["R1", "R2"],
+            transform_block_size_R1=2048,
+            transform_type="random-hadamard",
+        )
+    ]
+    _tmp_config = copy.deepcopy(model.thinker.config)
+    _tmp_config.update(model.thinker.config.text_config.to_dict())
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(helpers.patch_attr(model.thinker, "config", _tmp_config))
+        for mod in recipe_:
+            mod.on_initialize(state=state)
+        for param in model.thinker.model.parameters():
+            param.requires_grad = False
+        recipe_[0].on_start(state=state, event=None)
+
+    return state, recipe_, model
+
+
+def pre_compression_thinker_text_sequential(model):
+    from compressed_tensors.utils import remove_dispatch
+
+    def preprocess(example):
+        conversations = [
+            [
+                {
+                    "role": turn["role"],
+                    "content": [
+                        {k: v for k, v in content.items() if v is not None}
+                        for content in turn["content"]
+                    ],
+                }
+                for turn in example["messages"]
+            ]
+        ]
+        # conversations = [example["messages"] for example in examples]
+        text = processor.apply_chat_template(
+            conversations, add_generation_prompt=True, tokenize=False
+        )
+        audios, images, videos = process_mm_info(
+            conversations, use_audio_in_video=USE_AUDIO_IN_VIDEO
+        )
+        return processor(
+            text=text,
+            audio=audios,
+            images=images,
+            videos=videos,
+            return_tensors="pt",
+            padding=True,
+            use_audio_in_video=USE_AUDIO_IN_VIDEO,
+        )
+
+    ds = ds_vl.map(preprocess, remove_columns=ds_vl.column_names)
+
+    def data_collator(batch):
+        assert len(batch) == 1
+        return {
+            key: torch.tensor(
+                value, dtype=model_dtype if key == "pixel_values" else None
+            )
+            for key, value in batch[0].items()
+        }
+
+    original_init = SequentialTracer.__init__
+
+    def my_init(self, ancestors, offloaded):
+        original_init(
+            self,
+            ancestors,
+            offloaded,
+        )
+        # Force onload all modules.
+        device = get_execution_device(model)
+        remove_hook_from_module(model.thinker.visual.pos_embed, recurse=False)
+        model.thinker.visual.pos_embed.to(device)
+        self.offloaded.remove(model.thinker.visual.pos_embed)
+
+    state = State()
+    state.update(
+        model=model.thinker,
+    )
+
+    for param in model.thinker.model.parameters():
+        param.requires_grad = False
+
+    recipe_ = [
+        SpinQuantModifier(
+            do_fold=False,
+            backe_mean=False,
+            learnable=True,
+            rotations=["R1", "R2"],
+            transform_block_size_R1=2048,
+            transform_type="random-hadamard",
+        )
+    ]
+    _tmp_config = copy.deepcopy(model.thinker.config)
+    _tmp_config.update(model.thinker.config.text_config.to_dict())
+
+    ori_save = model.save_pretrained
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(helpers.patch_attr(SequentialTracer, "__init__", my_init))
+        stack.enter_context(helpers.patch_attr(model.thinker, "config", _tmp_config))
+        oneshot(
+            model=model.thinker,
+            processor=model.config._name_or_path,
+            dataset=ds,
+            recipe=recipe_,
+            tie_word_embeddings=True,
+            data_collator=data_collator,
+            max_seq_length=MAX_SEQUENCE_LENGTH,
+            num_calibration_samples=1,
+            sequential_targets=["Qwen3OmniMoeThinkerTextDecoderLayer"],
+        )
+        remove_dispatch(model)
+    model.save_pretrained = ori_save
+
+    return state, recipe_, model
+
+
 def pre_compression_thinker(model):
     # session = active_session()
     # session.reset()
@@ -618,7 +748,7 @@ def fsdp_main(model, config):
         model_to_train.teacher = TeacherModel(teacher_model)
     # Now you can train the model
     # model_to_train.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
-    model_to_train.config.text_config.use_cache = False # make activation ckpt
+    model_to_train.config.text_config.use_cache = False  # make activation ckpt
     model_to_train.train()
     trainer = MyTrainer(
         model=model_to_train,
@@ -649,20 +779,20 @@ def fsdp_main(model, config):
 
 @torch.no_grad()
 def post_compression_thinker_vit(state, recipe_, model, processor):
-    from llmcompressor.modeling.qwen3_omni_moe import replace_vit_attention_inv
-
+    recipe_[0]._fold_transforms_into_weights(state.model)
     replace_vit_attention_inv(model.thinker.visual)
 
 
 @torch.no_grad()
 def post_compression_thinker_aut(state, recipe_, model, processor):
+    recipe_[0]._fold_transforms_into_weights(state.model)
     delattr(model.thinker.audio_tower.positional_embedding, "positional_embedding")
 
 
 @torch.no_grad()
 def post_compression_thinker(state, recipe_, model, processor):
-    replace_vit_attention_inv(model.thinker.visual)
-    recipe_.modifiers[0].on_end(state=state, event=None)
+    recipe_[0]._fold_transforms_into_weights(state.model)
+    # recipe_[0].on_end(state=state, event=None)
     from collections import OrderedDict
 
     _h = set()
@@ -769,7 +899,11 @@ if __name__ == "__main__":
         )
         state_vit, recipe_vit, model = pre_compression_thinker_vit(model)
         state_aut, recipe_aut, model = pre_compression_thinker_aut(model)
-        state, recipe_, model = pre_compression_thinker(model)
+        if RANK_OTHER:
+            state, recipe_, model = pre_compression_thinker_text(model)
+        else:
+            state, recipe_, model = pre_compression_thinker_text_sequential(model)
+        model.thinker.apply(enable_quantization)
         dist.barrier()
         fsdp_main(model, config)
 

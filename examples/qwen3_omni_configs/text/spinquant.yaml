@@ -1,6 +1,7 @@
 quant_stage:
   quant_modifiers:
     SpinQuantModifier:
+      do_fold: False
       rotations: ["R1", "R2"]
       transform_block_size_R1: 2048
       learnable: True
@@ -8,7 +9,8 @@ quant_stage:
     # SmoothQuantModifier:
     #   smoothing_strength: 0.8
     QuantizationModifier:
-      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"]
+      # ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"]
+      ignore: ["re:lm_head"]
 
       config_groups:
         group_0:

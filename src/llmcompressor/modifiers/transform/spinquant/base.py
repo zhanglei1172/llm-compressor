@@ -90,7 +90,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
         A mapping will be inferred if None is provided
     :param transform_config: Optional transform config for overriding provided arguments
     """
-
+    do_fold: bool = Field(default=True)
     backe_mean: bool = Field(default=False)
     rotations: List[SpinquantRotation] = Field(default_factory=lambda: ["R1", "R2"])
     transform_type: Literal["hadamard", "random-hadamard", "random-matrix"] = Field(
@@ -183,7 +183,8 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
                 self.on_end(state, None)
 
     def on_end(self, state: State, event: Event, **kwargs):
-        self._fold_transforms_into_weights(state.model)
+        if self.do_fold:
+            self._fold_transforms_into_weights(state.model)
         self.ended_ = True
 
     def on_finalize(self, state: State, **kwargs) -> bool:
