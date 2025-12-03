@@ -610,6 +610,7 @@ def fsdp_main(model, config):
         model_path = train_args.special.get("teacher_path", MODEL_ID)
 
         teacher_model, _ = dist_load_model(model_path)
+        teacher_model = teacher_model.thinker
         teacher_model.eval()
         for param in teacher_model.parameters():
             param.requires_grad = False
