@@ -7,7 +7,7 @@ import copy
 import difflib
 import re
 from operator import attrgetter
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from compressed_tensors import InternalModule

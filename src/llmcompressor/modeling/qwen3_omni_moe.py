@@ -73,8 +73,14 @@ class ReformQwen3OmniMoeVisionAttention(nn.Module):
         self.v_proj.weight.data = ori_module.qkv.weight.data[2 * self.dim :, :]
         self.v_proj.bias.data = ori_module.qkv.bias.data[2 * self.dim :]
 
-        self.proj.weight.data = ori_module.proj.weight.data
-        self.proj.bias.data = ori_module.proj.bias.data
+        self.proj.weight = ori_module.proj.weight
+        self.proj.bias = ori_module.proj.bias
+        self.q_proj.weight.requires_grad = ori_module.qkv.weight.requires_grad
+        self.q_proj.bias.requires_grad = ori_module.qkv.bias.requires_grad
+        self.k_proj.weight.requires_grad = ori_module.qkv.weight.requires_grad
+        self.k_proj.bias.requires_grad = ori_module.qkv.bias.requires_grad
+        self.v_proj.weight.requires_grad = ori_module.qkv.weight.requires_grad
+        self.v_proj.bias.requires_grad = ori_module.qkv.bias.requires_grad
 
     def forward(
         self,
@@ -310,6 +316,7 @@ def replace_audio_embedding(module: torch.nn.Module):
                 dtype=child.positional_embedding.dtype,
             )
             replaced.weight.data = child.positional_embedding.data.clone()
+            replaced.weight.requires_grad = False
             setattr(module, name, replaced)
         else:
             replace_audio_embedding(child)

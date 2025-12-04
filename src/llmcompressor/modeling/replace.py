@@ -25,7 +25,7 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
         device=next(module.parameters()).device,
         dtype=next(module.parameters()).dtype
     )
-
+    rmsnorm.weight.requires_grad = module.weight.requires_grad
     if hasattr(module, "_hf_hook"):
         add_hook_to_module(rmsnorm, module._hf_hook)
 

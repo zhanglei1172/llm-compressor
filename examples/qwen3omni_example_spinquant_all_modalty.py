@@ -53,6 +53,7 @@ from llmcompressor.core.state import State
 from llmcompressor.modeling.qwen3_omni_moe import replace_vit_attention_inv
 from llmcompressor.modifiers.awq import AWQModifier
 from llmcompressor.modifiers.awq import mappings as awq_mappings
+from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.modifiers.transform import SpinQuantModifier
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
@@ -169,7 +170,7 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 #################### configurations ####################
 calibrate_moe_context = True
 # Select model and load it.
-pretrain = "ostq"
+pretrain = "origin"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 256
 #################### configurations ####################
@@ -184,6 +185,13 @@ else:
 if calibrate_moe_context:
     flag += "-calmoe"
 
+SAVE_DIR = (
+    "/tmp/"
+    + MODEL_ID.rstrip("/").split("/")[-1]
+    + f"-{pretrain}-{flag}-sym-com-text"
+    + "-trans"
+)
+
 MAX_SEQUENCE_LENGTH = 2048
 # Load dataset and preprocess.
 # ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
@@ -193,6 +201,7 @@ ds_vl = load_dataset(
 ds_al = load_dataset(
     "/dataset/workspace/zhangl98/dataset/peoples_speech/test", split="test[:256]"
 )
+ds_text = load_dataset("unsloth/OpenMathReasoning-mini", split="cot[:256]")
 
 
 def encode_base64_img(img) -> str:
@@ -311,6 +320,17 @@ def format_as_al_messages(example, prompt: str | None = None):
     }
 
 
+def format_as_text_messages(example, prompt: str | None = None):
+    """Format single example into messages format for TRL."""
+    problem = example["problem"]
+    solution = example["generated_solution"]
+    conversations = [
+        {"role": "user", "content": [{"type": "text", "text": problem}]},
+        {"role": "assistant", "content": [{"type": "text", "text": solution}]},
+    ]
+    return {"messages": conversations}
+
+
 ds_vl = ds_vl.map(
     format_as_messages,
     remove_columns=ds_vl.column_names,
@@ -321,6 +341,12 @@ ds_vl = ds_vl.map(
 ds_al = ds_al.map(
     format_as_al_messages,
     remove_columns=ds_al.column_names,
+    # num_proc=6,
+    fn_kwargs={"prompt": "Please transcribe the audio."},
+)
+ds_text = ds_text.map(
+    format_as_text_messages,
+    remove_columns=ds_text.column_names,
     # num_proc=6,
     fn_kwargs={"prompt": "Please transcribe the audio."},
 )
@@ -344,16 +370,21 @@ target_features = Features(
         ]
     }
 )
-ds = concatenate_datasets([ds_vl.cast(target_features), ds_al.cast(target_features)])
+ds = concatenate_datasets(
+    [
+        ds_vl.cast(target_features),
+        ds_al.cast(target_features),
+        ds_text.cast(target_features),
+    ]
+)
 ds = ds.shuffle(seed=42)
 
 
+@torch.no_grad()
 def pre_compression_thinker_vit(model):
     from llmcompressor.modeling.qwen3_omni_moe import replace_vit_attention
 
     replace_vit_attention(model.thinker.visual)
-    # session = active_session()
-    # session.reset()
     state = State()
     state.update(
         model=model.thinker.visual,
@@ -365,6 +396,7 @@ def pre_compression_thinker_vit(model):
             rotations=["R1", "R2"],
             transform_block_size_R1=1152,
             transform_type="random-hadamard",
+            sequential_onload=not RANK_OTHER,
         )
     ]
 
@@ -377,13 +409,14 @@ def pre_compression_thinker_vit(model):
         )
         for mod in recipe_:
             mod.on_initialize(state=state)
-        for param in model.thinker.visual.parameters():
-            param.requires_grad = False
+        # for param in model.thinker.visual.parameters():
+        #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
 
     return state, recipe_, model
 
 
+@torch.no_grad()
 def pre_compression_thinker_aut(model):
     from llmcompressor.modeling.qwen3_omni_moe import replace_audio_embedding
 
@@ -404,6 +437,7 @@ def pre_compression_thinker_aut(model):
             rotations=["R1", "R2"],
             transform_block_size_R1=1280,
             transform_type="random-hadamard",
+            sequential_onload=not RANK_OTHER,
         )
     ]
 
@@ -418,13 +452,14 @@ def pre_compression_thinker_aut(model):
         )
         for mod in recipe_:
             mod.on_initialize(state=state)
-        for param in model.thinker.audio_tower.parameters():
-            param.requires_grad = False
+        # for param in model.thinker.audio_tower.parameters():
+        #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
 
     return state, recipe_, model
 
 
+@torch.no_grad()
 def pre_compression_thinker_text(model):
     # session = active_session()
     # session.reset()
@@ -439,6 +474,7 @@ def pre_compression_thinker_text(model):
             rotations=["R1", "R2"],
             transform_block_size_R1=2048,
             transform_type="random-hadamard",
+            sequential_onload=not RANK_OTHER,
         )
     ]
     _tmp_config = copy.deepcopy(model.thinker.config)
@@ -448,13 +484,14 @@ def pre_compression_thinker_text(model):
         stack.enter_context(helpers.patch_attr(model.thinker, "config", _tmp_config))
         for mod in recipe_:
             mod.on_initialize(state=state)
-        for param in model.thinker.model.parameters():
-            param.requires_grad = False
+        # for param in model.thinker.model.parameters():
+        #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
 
     return state, recipe_, model
 
 
+@torch.no_grad()
 def pre_compression_thinker_text_sequential(model):
     from compressed_tensors.utils import remove_dispatch
 
@@ -509,17 +546,19 @@ def pre_compression_thinker_text_sequential(model):
         )
         # Force onload all modules.
         device = get_execution_device(model)
-        remove_hook_from_module(model.thinker.visual.pos_embed, recurse=False)
+        remove_hook_from_module(model.thinker.visual.pos_embed, recurse=True)
         model.thinker.visual.pos_embed.to(device)
-        self.offloaded.remove(model.thinker.visual.pos_embed)
+        for module in model.thinker.visual.pos_embed.modules():
+            if module in self.offloaded:
+                self.offloaded.remove(module)
 
     state = State()
     state.update(
         model=model.thinker,
     )
 
-    for param in model.thinker.model.parameters():
-        param.requires_grad = False
+    # for param in model.thinker.model.parameters():
+    #     param.requires_grad = False
 
     recipe_ = [
         SpinQuantModifier(
@@ -555,25 +594,77 @@ def pre_compression_thinker_text_sequential(model):
     return state, recipe_, model
 
 
+@torch.no_grad()
 def pre_compression_thinker(model):
-    # session = active_session()
-    # session.reset()
     state = State()
     state.update(
         model=model.thinker,
     )
-    recipe_ = Recipe.create_instance(path_or_modifiers=recipe, target_stage=None)
+    recipe_ = [
+        QuantizationModifier(
+            ignore=["lm_head"],
+            config_groups={
+                "group_0": {
+                    "weights": {
+                        "observer": "minmax",
+                        "num_bits": 4,
+                        "type": "int",
+                        "symmetric": True,
+                        "strategy": "channel",
+                        "dynamic": True,
+                    },
+                    "input_activations": {
+                        "observer": "minmax",
+                        "num_bits": 8,
+                        "type": "int",
+                        "symmetric": True,
+                        "strategy": "tensor",
+                        "dynamic": True,
+                    },
+                    "targets": [
+                        r"re:.*up_proj$",
+                        r"re:.*gate_proj$",
+                        r"re:.*q_proj$",
+                        r"re:.*k_proj$",
+                        r"re:.*v_proj$",
+                        r"re:.*o_proj$",
+                    ],
+                    "ste": True,
+                },
+                "group_1": {
+                    "weights": {
+                        "observer": "minmax",
+                        "num_bits": 4,
+                        "type": "int",
+                        "symmetric": True,
+                        "strategy": "channel",
+                        "dynamic": True,
+                    },
+                    "input_activations": {
+                        "observer": "minmax",
+                        "num_bits": 16,
+                        "type": "int",
+                        "symmetric": True,
+                        "strategy": "tensor",
+                        "dynamic": True,
+                    },
+                    "targets": [r"re:.*down_proj$"],
+                    "ste": True,
+                },
+            },
+        )
+    ]
 
     _tmp_config = copy.deepcopy(model.thinker.config)
     _tmp_config.update(model.thinker.config.text_config.to_dict())
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(helpers.patch_attr(model.thinker, "config", _tmp_config))
-        for mod in recipe_.modifiers:
+        stack.enter_context(torch.nn.utils.parametrize.cached())
+        for mod in recipe_:
             mod.on_initialize(state=state)
-        for param in model.thinker.model.parameters():
-            param.requires_grad = False
-        recipe_.modifiers[0].on_start(state=state, event=None)
+        # for param in model.thinker.model.parameters():
+        #     param.requires_grad = False
         model.thinker.apply(enable_quantization)
 
     return state, recipe_, model
@@ -710,9 +801,10 @@ def cleanup():
 
 
 def fsdp_main(model, config):
+    training_params_cnt = 0
     for name, param in model.named_parameters():
-        if param.requires_grad and name.endswith("bias"):
-            param.requires_grad = False
+        if param.requires_grad:
+            training_params_cnt += 1
     weight_tied_name_map = build_weight_tied_map_with_unionfind(model.thinker)
 
     state_dict = model.thinker.state_dict()
@@ -750,6 +842,7 @@ def fsdp_main(model, config):
     # model_to_train.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
     model_to_train.config.text_config.use_cache = False  # make activation ckpt
     model_to_train.train()
+    assert len(set(weight_tied_name_map.values())) == training_params_cnt
     trainer = MyTrainer(
         model=model_to_train,
         # tokenizer=train_processor.tokenizer,
@@ -778,20 +871,24 @@ def fsdp_main(model, config):
 
 
 @torch.no_grad()
-def post_compression_thinker_vit(state, recipe_, model, processor):
+def post_compression_thinker_vit(state, recipe_, model):
     recipe_[0]._fold_transforms_into_weights(state.model)
     replace_vit_attention_inv(model.thinker.visual)
 
 
 @torch.no_grad()
-def post_compression_thinker_aut(state, recipe_, model, processor):
+def post_compression_thinker_aut(state, recipe_, model):
     recipe_[0]._fold_transforms_into_weights(state.model)
     delattr(model.thinker.audio_tower.positional_embedding, "positional_embedding")
 
 
 @torch.no_grad()
-def post_compression_thinker(state, recipe_, model, processor):
+def post_compression_thinker_text(state, recipe_, model):
     recipe_[0]._fold_transforms_into_weights(state.model)
+
+
+@torch.no_grad()
+def post_compression_thinker(state, recipe_, model, processor):
     # recipe_[0].on_end(state=state, event=None)
     from collections import OrderedDict
 
@@ -824,18 +921,11 @@ def post_compression_thinker(state, recipe_, model, processor):
     from compressed_tensors.quantization import QuantizationStatus
     from compressed_tensors.utils.match import match_named_modules
 
-    SAVE_DIR = (
-        "/tmp/"
-        + MODEL_ID.rstrip("/").split("/")[-1]
-        + f"-{pretrain}-{flag}-sym-com-text"
-        + "-trans"
-    )
-
     quantized_name_set = set()
     import re
 
     for _, module in match_named_modules(
-        model, recipe_.modifiers[-1].resolved_targets, recipe_.modifiers[-1].ignore
+        model, recipe_[-1].resolved_targets, recipe_[-1].ignore
     ):
         if hasattr(module, "quantization_status"):
             quantized_name_set.add(re.sub(r"\d+", "X", _))
@@ -890,25 +980,29 @@ if __name__ == "__main__":
     if RANK_OTHER:
         logger.remove()
     model, processor = dist_load_model(load_processor=True)
-    dist.barrier()
+    # dist.barrier()
     with patch_module_non_persistent_buffers(model):
         model.eval()
         # no_grad for compression
-        model.apply(
-            lambda m: m.weight.requires_grad_(False) if hasattr(m, "weight") else None
-        )
+        for param in model.parameters():
+            param.requires_grad = False
         state_vit, recipe_vit, model = pre_compression_thinker_vit(model)
         state_aut, recipe_aut, model = pre_compression_thinker_aut(model)
-        if RANK_OTHER:
-            state, recipe_, model = pre_compression_thinker_text(model)
-        else:
-            state, recipe_, model = pre_compression_thinker_text_sequential(model)
-        model.thinker.apply(enable_quantization)
+        state_text, recipe_text, model = pre_compression_thinker_text(model)
+        # if RANK_OTHER:
+        #     state_text, recipe_text, model = pre_compression_thinker_text(model)
+        # else:
+        #     state_text, recipe_text, model = pre_compression_thinker_text_sequential(
+        #         model
+        #     )
+        # model.thinker.apply(enable_quantization)
+        state, recipe_, model = pre_compression_thinker(model)
         dist.barrier()
         fsdp_main(model, config)
 
     if not RANK_OTHER:
-        post_compression_thinker_vit(state_vit, recipe_vit, model, processor)
-        post_compression_thinker_aut(state_aut, recipe_aut, model, processor)
+        post_compression_thinker_vit(state_vit, recipe_vit, model)
+        post_compression_thinker_aut(state_aut, recipe_aut, model)
+        post_compression_thinker_text(state_text, recipe_text, model)
         post_compression_thinker(state, recipe_, model, processor)
     cleanup()

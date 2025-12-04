@@ -122,6 +122,8 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
     # also included in recipe serialization
     transform_config: Optional[TransformConfig] = Field(default=None, repr=False)
 
+    sequential_onload: bool = Field(default=False)
+
     @field_validator("randomize", mode="before")
     def validate_not_implemented(cls, value, info: ValidationInfo):
         if value:
@@ -230,6 +232,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
 
     def _create_r1_scheme(self) -> TransformScheme:
         return TransformScheme(
+            sequential_onload=self.sequential_onload,
             type=self.transform_type,
             randomize=self.randomize,
             requires_grad=self.learnable,
@@ -278,6 +281,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
             head_dim = self.transform_block_size_R2
 
         return TransformScheme(
+            sequential_onload=self.sequential_onload,
             type=self.transform_type,
             block_wise=True,
             randomize=self.randomize,
@@ -301,6 +305,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
 
     def _create_r4_scheme(self) -> TransformScheme:
         return TransformScheme(
+            sequential_onload=self.sequential_onload,
             type=self.transform_type,
             block_wise=True,
             randomize=self.randomize,
