@@ -51,9 +51,10 @@ class MyTrainer(Trainer):
         teacher_model = kwargs.pop("teacher_model", None)
         ignored_modules = kwargs.pop("ignored_modules", [])
         self.weight_tied_name_map = kwargs.pop("weight_tied_name_map", {})
-        self.uniq_mods = sorted(
+        self.uniq_mods_name = sorted(
             set(m_name for m_name, p_name in self.weight_tied_name_map.values())
         )
+        self.uniq_mods = []
         super().__init__(*args, **kwargs)
         if (
             hasattr(self.accelerator.state, "fsdp_plugin")
@@ -65,10 +66,12 @@ class MyTrainer(Trainer):
             with patch_module_to_cuda(torch.nn.Module):
                 for m in ignored_modules:
                     m.cuda()
-                for m_name in self.uniq_mods: # 避免同参数占用多份导致OOM
+                    self.uniq_mods.append(m)
+                for m_name in self.uniq_mods_name: # 避免同参数占用多份导致OOM
                     m = model.get_submodule(m_name)
                     assert isinstance(m, (TransformBase))
                     m.cuda()
+                    self.uniq_mods.append(m)
             for m in model.modules():
                 if isinstance(m, (TransformBase)):
                     ignored_modules.append(m)
@@ -84,7 +87,7 @@ class MyTrainer(Trainer):
             nni.report_intermediate_result(loss.item())
         return loss
 
-    @torch.compile(fullgraph=False, disable=True)
+    @torch.compile(fullgraph=False, disable=False)
     def compute_loss(self, model, inputs, **kwargs):
         args = self.args
         loss_type = args.special.get("loss_type", "origin")
@@ -226,14 +229,18 @@ class MyTrainer(Trainer):
         import geoopt
         from geoopt.manifolds import EuclideanStiefel, Stiefel
 
-        for m_name in self.uniq_mods: # 避免同参数占用多份导致OOM
+        with patch_module_to_cuda(torch.nn.Module):
+            for m in self.uniq_mods: # 避免同参数占用多份导致OOM
+                m.cuda() # 同步其他rank上的param value
+
+        for m_name in self.uniq_mods_name: # 避免同参数占用多份导致OOM
             m = self.model.get_submodule(m_name)
             for name, param in m.named_parameters(recurse=False):
                 if param.requires_grad and len(param.size()) > 1:
                     m.register_parameter(
                         name, geoopt.ManifoldParameter(param.data, manifold=Stiefel())
                     )
-            
+
         # for m in self.accelerator.state.fsdp_plugin.ignored_modules: # 避免同参数占用多份导致OOM
         #     for name, param in m.named_parameters(recurse=False):
         #         if param.requires_grad and len(param.size()) > 1:

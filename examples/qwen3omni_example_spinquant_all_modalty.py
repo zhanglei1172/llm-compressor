@@ -196,12 +196,12 @@ MAX_SEQUENCE_LENGTH = 2048
 # Load dataset and preprocess.
 # ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
 ds_vl = load_dataset(
-    "lmms-lab/LLaVA-OneVision-Data", "FigureQA(MathV360K)", split="train[:256]"
+    "lmms-lab/LLaVA-OneVision-Data", "FigureQA(MathV360K)", split="train[:512]"
 )
 ds_al = load_dataset(
-    "/dataset/workspace/zhangl98/dataset/peoples_speech/test", split="test[:256]"
+    "/dataset/workspace/zhangl98/dataset/peoples_speech/test", split="test[:512]"
 )
-ds_text = load_dataset("unsloth/OpenMathReasoning-mini", split="cot[:256]")
+ds_text = load_dataset("unsloth/OpenMathReasoning-mini", split="cot[:512]")
 
 
 def encode_base64_img(img) -> str:
@@ -628,6 +628,10 @@ def pre_compression_thinker(model):
                         r"re:.*k_proj$",
                         r"re:.*v_proj$",
                         r"re:.*o_proj$",
+                        r"re:.*out_proj$",
+                        r"re:.*proj1$",
+                        r"re:.*fc1$",
+                        r"re:.*attn\.proj$",
                     ],
                     "ste": True,
                 },
@@ -648,7 +652,10 @@ def pre_compression_thinker(model):
                         "strategy": "tensor",
                         "dynamic": True,
                     },
-                    "targets": [r"re:.*down_proj$"],
+                    "targets": [r"re:.*down_proj$",
+                                r"re:.*fc2$",
+                                r"re:.*proj2$",
+                                ],
                     "ste": True,
                 },
             },
@@ -871,20 +878,19 @@ def fsdp_main(model, config):
 
 
 @torch.no_grad()
-def post_compression_thinker_vit(state, recipe_, model):
-    recipe_[0]._fold_transforms_into_weights(state.model)
+def post_compression_thinker_vit(model):
+
     replace_vit_attention_inv(model.thinker.visual)
 
 
 @torch.no_grad()
-def post_compression_thinker_aut(state, recipe_, model):
-    recipe_[0]._fold_transforms_into_weights(state.model)
+def post_compression_thinker_aut(model):
     delattr(model.thinker.audio_tower.positional_embedding, "positional_embedding")
 
 
 @torch.no_grad()
-def post_compression_thinker_text(state, recipe_, model):
-    recipe_[0]._fold_transforms_into_weights(state.model)
+def post_compression_thinker_text(model):
+    pass
 
 
 @torch.no_grad()
@@ -938,6 +944,11 @@ def post_compression_thinker(state, recipe_, model, processor):
                 if key.endswith("_scale") or key.endswith("_zero_point"):
                     delattr(module, key)
     print(f"Total quantized modules: {quantized_name_set}")
+
+    post_compression_thinker_vit(model)
+    post_compression_thinker_aut(model)
+    post_compression_thinker_text(model)
+
     model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
     processor.save_pretrained(SAVE_DIR)
     torch.save(transform_state_dict, f"{SAVE_DIR}/transform_state_dict.pt")
@@ -1001,8 +1012,9 @@ if __name__ == "__main__":
         fsdp_main(model, config)
 
     if not RANK_OTHER:
-        post_compression_thinker_vit(state_vit, recipe_vit, model)
-        post_compression_thinker_aut(state_aut, recipe_aut, model)
-        post_compression_thinker_text(state_text, recipe_text, model)
+        recipe_vit[0]._fold_transforms_into_weights(state_vit.model)
+        recipe_aut[0]._fold_transforms_into_weights(state_aut.model)
+        recipe_text[0]._fold_transforms_into_weights(state_text.model)
+
         post_compression_thinker(state, recipe_, model, processor)
     cleanup()
