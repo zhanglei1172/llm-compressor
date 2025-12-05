@@ -10,10 +10,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import DistributedDataParallelKwargs
+from accelerate.utils import DistributedDataParallelKwargs, TorchDynamoPlugin
 from compressed_tensors.transform.factory.base import TransformBase
 from packaging import version
 from torch import nn
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+    _CHECKPOINT_WRAPPED_MODULE,
+)
 from torch.distributed.fsdp import (
     FullStateDictConfig,
 )
@@ -67,7 +70,7 @@ class MyTrainer(Trainer):
                 for m in ignored_modules:
                     m.cuda()
                     self.uniq_mods.append(m)
-                for m_name in self.uniq_mods_name: # 避免同参数占用多份导致OOM
+                for m_name in self.uniq_mods_name:  # 避免同参数占用多份导致OOM
                     m = model.get_submodule(m_name)
                     assert isinstance(m, (TransformBase))
                     m.cuda()
@@ -80,6 +83,14 @@ class MyTrainer(Trainer):
 
             self.accelerator.state.fsdp_plugin.ignored_modules = ignored_modules
             self.accelerator.state.fsdp_plugin.use_orig_params = True
+            # dynamo_plugin = TorchDynamoPlugin(
+            #     use_regional_compilation=True,
+            #     backend="inductor",  # Options: "inductor", "aot_eager", "aot_nvfuser", etc.
+            #     mode="default",  # Options: "default", "reduce-overhead", "max-autotune"
+            #     fullgraph=False,
+            #     dynamic=True,
+            # )
+            # self.accelerator.state.dynamo_plugin = dynamo_plugin
 
     def training_step(self, model: nn.Module, inputs, num_items_in_batch=None):
         loss = super().training_step(model, inputs, num_items_in_batch)
@@ -87,7 +98,7 @@ class MyTrainer(Trainer):
             nni.report_intermediate_result(loss.item())
         return loss
 
-    @torch.compile(fullgraph=False, disable=False)
+    @torch.compile(fullgraph=False, disable=True)
     def compute_loss(self, model, inputs, **kwargs):
         args = self.args
         loss_type = args.special.get("loss_type", "origin")
@@ -230,10 +241,10 @@ class MyTrainer(Trainer):
         from geoopt.manifolds import EuclideanStiefel, Stiefel
 
         with patch_module_to_cuda(torch.nn.Module):
-            for m in self.uniq_mods: # 避免同参数占用多份导致OOM
-                m.cuda() # 同步其他rank上的param value
+            for m in self.uniq_mods:  # 避免同参数占用多份导致OOM
+                m.cuda()  # 同步其他rank上的param value
 
-        for m_name in self.uniq_mods_name: # 避免同参数占用多份导致OOM
+        for m_name in self.uniq_mods_name:  # 避免同参数占用多份导致OOM
             m = self.model.get_submodule(m_name)
             for name, param in m.named_parameters(recurse=False):
                 if param.requires_grad and len(param.size()) > 1:
@@ -248,6 +259,8 @@ class MyTrainer(Trainer):
         #                 name, geoopt.ManifoldParameter(param.data, manifold=Stiefel())
         #             )
         self.register_tied_parameters(self.model, self.weight_tied_name_map)
+
+        self.model = compile_regions(self.model, backend="inductor", dynamic=True)
 
         args = self.args
         params_rotate = []
@@ -310,3 +323,55 @@ class MyTrainer(Trainer):
             return state_dict
         else:
             return self.model.state_dict()
+
+
+def is_repeated_blocks(module: torch.nn.Module) -> bool:
+    return (
+        isinstance(module, torch.nn.ModuleList)
+        and not isinstance(module, torch.nn.utils.parametrize.ParametrizationList)
+        and all(isinstance(m, module[0].__class__) for m in module)
+    )
+
+
+def has_repeated_blocks(module: torch.nn.Module) -> bool:
+    if module._modules:
+        for submodule in module.modules():
+            if is_repeated_blocks(submodule):
+                return True
+
+    return False
+
+
+def compile_regions(module: torch.nn.Module, **compile_kwargs) -> torch.nn.Module:
+    def _compile_regions(module: torch.nn.Module, **compile_kwargs) -> torch.nn.Module:
+        if is_repeated_blocks(module):
+            new_module = torch.nn.ModuleList()
+            for submodule in module:
+                new_module.append(torch.compile(submodule, **compile_kwargs))
+        elif has_repeated_blocks(module):
+            new_module = module.__class__.__new__(module.__class__)
+            new_module.__dict__.update(module.__dict__)
+            new_module._modules = {}
+            for name, submodule in module.named_children():
+                if name in (_CHECKPOINT_WRAPPED_MODULE, "_fsdp_wrapped_module"):
+                    setattr(
+                        new_module,
+                        name,
+                        _compile_regions(submodule, **compile_kwargs),
+                    )
+                else:
+                    new_module.add_module(
+                        name, _compile_regions(submodule, **compile_kwargs)
+                    )
+        else:
+            new_module = torch.compile(module, **compile_kwargs)
+
+        return new_module
+
+    new_module = _compile_regions(module, **compile_kwargs)
+
+    if "_orig_mod" not in new_module.__dict__:
+        # Keeps a reference to the original module to decompile/unwrap it later
+        new_module.__dict__["_orig_mod"] = module
+
+    return new_module

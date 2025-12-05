@@ -652,10 +652,11 @@ def pre_compression_thinker(model):
                         "strategy": "tensor",
                         "dynamic": True,
                     },
-                    "targets": [r"re:.*down_proj$",
-                                r"re:.*fc2$",
-                                r"re:.*proj2$",
-                                ],
+                    "targets": [
+                        r"re:.*down_proj$",
+                        r"re:.*fc2$",
+                        r"re:.*proj2$",
+                    ],
                     "ste": True,
                 },
             },
@@ -835,6 +836,7 @@ def fsdp_main(model, config):
         "origin",
         "DFT",
     )
+    model_to_train.train()
     if need_teacher:
         model_path = train_args.special.get("teacher_path", MODEL_ID)
 
@@ -848,7 +850,6 @@ def fsdp_main(model, config):
     # Now you can train the model
     # model_to_train.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
     model_to_train.config.text_config.use_cache = False  # make activation ckpt
-    model_to_train.train()
     assert len(set(weight_tied_name_map.values())) == training_params_cnt
     trainer = MyTrainer(
         model=model_to_train,
@@ -879,7 +880,6 @@ def fsdp_main(model, config):
 
 @torch.no_grad()
 def post_compression_thinker_vit(model):
-
     replace_vit_attention_inv(model.thinker.visual)
 
 

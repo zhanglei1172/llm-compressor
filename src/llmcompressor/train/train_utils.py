@@ -434,9 +434,9 @@ class AdamG(Optimizer):
         return loss
 
 class TeacherModel(nn.Module):
-    def __init__(self, ori_moule):
+    def __init__(self, ori_m):
         super().__init__()
-        self.ori_moule = ori_moule
+        self.ori_m = ori_m
 
     def forward(self, *args, **kwargs):
-        return self.ori_moule(*args, **kwargs)
+        return self.ori_m(*args, **kwargs)
