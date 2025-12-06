@@ -173,6 +173,11 @@ calibrate_moe_context = True
 pretrain = "origin"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 256
+enable_modality = {
+    # "vit",
+    "aut",
+    # "text"
+}
 #################### configurations ####################
 
 model_dtype = torch.bfloat16
@@ -184,6 +189,7 @@ else:
 
 if calibrate_moe_context:
     flag += "-calmoe"
+flag += str(tuple(enable_modality)).replace("'","")
 
 SAVE_DIR = (
     "/tmp/"
@@ -201,8 +207,8 @@ ds_vl = load_dataset(
 ds_al = load_dataset(
     "/dataset/workspace/zhangl98/dataset/peoples_speech/test", split="test[:512]"
 )
-ds_text = load_dataset("unsloth/OpenMathReasoning-mini", split="cot[:512]")
-
+ds_text = load_dataset("hkust-nlp/deita-6k-v0", split="train[:512]")
+ds_wiki = load_from_disk("/dataset/workspace/zhangl98/dataset/calib/wikitext2/")
 
 def encode_base64_img(img) -> str:
     with BytesIO() as buffer:
@@ -345,10 +351,10 @@ ds_al = ds_al.map(
     fn_kwargs={"prompt": "Please transcribe the audio."},
 )
 ds_text = ds_text.map(
-    format_as_text_messages,
+    format_as_messages,
     remove_columns=ds_text.column_names,
     # num_proc=6,
-    fn_kwargs={"prompt": "Please transcribe the audio."},
+    # fn_kwargs={"prompt": "Please transcribe the audio."},
 )
 
 from datasets import Features, Value
@@ -370,13 +376,15 @@ target_features = Features(
         ]
     }
 )
-ds = concatenate_datasets(
-    [
-        ds_vl.cast(target_features),
-        ds_al.cast(target_features),
-        ds_text.cast(target_features),
-    ]
-)
+
+ds = []
+if "vit" in enable_modality:
+    ds.append(ds_vl)
+if "aut" in enable_modality:
+    ds.append(ds_al)
+if "text" in enable_modality:
+    ds.append(ds_text)
+ds = concatenate_datasets(ds)
 ds = ds.shuffle(seed=42)
 
 
@@ -600,9 +608,16 @@ def pre_compression_thinker(model):
     state.update(
         model=model.thinker,
     )
+    ignore = ["lm_head"]
+    if "vit" not in enable_modality:
+        ignore.append("re:visual.*")
+    if "aut" not in enable_modality:
+        ignore.append("re:audio_tower.*")
+    if "text" not in enable_modality:
+        ignore.append("re:model.*")
     recipe_ = [
         QuantizationModifier(
-            ignore=["lm_head"],
+            ignore=ignore,
             config_groups={
                 "group_0": {
                     "weights": {
@@ -744,10 +759,12 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
         )
 
         for batch_idx, token_ids in enumerate(batch["input_ids"].tolist()):
+            valid = False
             pos = 0
             is_assistant_response = False
             while pos < len(token_ids):
                 if is_assistant_response:
+                    valid = True
                     if token_ids[pos] == self.assistant_end_tokens[0]:
                         # Check if the assistant response ends
                         is_assistant_end = True
@@ -785,6 +802,8 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
                             pos += 1
                     else:
                         pos += 1
+            if not valid:
+                labels[batch_idx, :] = token_ids
 
         batch["labels"] = labels  # batch["input_ids"]
         if "input_features" in batch:
@@ -872,7 +891,10 @@ def fsdp_main(model, config):
     with PT_FSDP.state_dict_type(
         model_to_train, StateDictType.FULL_STATE_DICT, save_policy
     ):
-        state_dict = trainer.model.state_dict()
+        if hasattr(trainer.model, "_orig_mod"):
+            state_dict = trainer.model._orig_mod.state_dict()
+        else:
+            state_dict = trainer.model.state_dict()
         if not RANK_OTHER:
             model.thinker.load_state_dict(state_dict, assign=True)
             trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
@@ -944,10 +966,12 @@ def post_compression_thinker(state, recipe_, model, processor):
                 if key.endswith("_scale") or key.endswith("_zero_point"):
                     delattr(module, key)
     print(f"Total quantized modules: {quantized_name_set}")
-
-    post_compression_thinker_vit(model)
-    post_compression_thinker_aut(model)
-    post_compression_thinker_text(model)
+    if "vit" in enable_modality:
+        post_compression_thinker_vit(model)
+    if "aut" in enable_modality:
+        post_compression_thinker_aut(model)
+    if "text" in enable_modality:
+        post_compression_thinker_text(model)
 
     model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
     processor.save_pretrained(SAVE_DIR)
@@ -997,9 +1021,12 @@ if __name__ == "__main__":
         # no_grad for compression
         for param in model.parameters():
             param.requires_grad = False
-        state_vit, recipe_vit, model = pre_compression_thinker_vit(model)
-        state_aut, recipe_aut, model = pre_compression_thinker_aut(model)
-        state_text, recipe_text, model = pre_compression_thinker_text(model)
+        if "vit" in enable_modality:
+            state_vit, recipe_vit, model = pre_compression_thinker_vit(model)
+        if "aut" in enable_modality:
+            state_aut, recipe_aut, model = pre_compression_thinker_aut(model)
+        if "text" in enable_modality:
+            state_text, recipe_text, model = pre_compression_thinker_text(model)
         # if RANK_OTHER:
         #     state_text, recipe_text, model = pre_compression_thinker_text(model)
         # else:
@@ -1012,9 +1039,12 @@ if __name__ == "__main__":
         fsdp_main(model, config)
 
     if not RANK_OTHER:
-        recipe_vit[0]._fold_transforms_into_weights(state_vit.model)
-        recipe_aut[0]._fold_transforms_into_weights(state_aut.model)
-        recipe_text[0]._fold_transforms_into_weights(state_text.model)
+        if "vit" in enable_modality:
+            recipe_vit[0]._fold_transforms_into_weights(state_vit.model)
+        if "aut" in enable_modality:
+            recipe_aut[0]._fold_transforms_into_weights(state_aut.model)
+        if "text" in enable_modality:
+            recipe_text[0]._fold_transforms_into_weights(state_text.model)
 
         post_compression_thinker(state, recipe_, model, processor)
     cleanup()
