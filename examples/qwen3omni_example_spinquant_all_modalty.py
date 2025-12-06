@@ -896,6 +896,7 @@ def fsdp_main(model, config):
         else:
             state_dict = trainer.model.state_dict()
         if not RANK_OTHER:
+            state_dict = {k: v for k, v in state_dict.items() if not k.startswith("teacher")}
             model.thinker.load_state_dict(state_dict, assign=True)
             trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
 
