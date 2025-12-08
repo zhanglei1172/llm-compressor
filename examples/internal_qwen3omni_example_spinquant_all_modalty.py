@@ -652,7 +652,7 @@ def pre_compression_thinker(model):
                         r"re:.*v_proj$",
                         r"re:.*o_proj$",
                         r"re:.*out_proj$",
-                        r"re:.*proj1$",
+                        # r"re:.*proj1$",
                         r"re:.*fc1$",
                         r"re:.*attn\.proj$",
                     ],
@@ -678,7 +678,7 @@ def pre_compression_thinker(model):
                     "targets": [
                         r"re:.*down_proj$",
                         r"re:.*fc2$",
-                        r"re:.*proj2$",
+                        # r"re:.*proj2$",
                     ],
                     "ste": True,
                 },
@@ -834,6 +834,24 @@ def cleanup():
     dist.barrier()
     dist.destroy_process_group()
 
+def patch_audio_training(model):
+    module = model
+
+    ori_forward = module.forward.__func__
+
+    def forward(module, *args, **kwargs):
+        feature_attention_mask = kwargs.get("feature_attention_mask", None)
+        input_features = kwargs.get("input_features", None)
+        audio_feature_lengths = kwargs.get("audio_feature_lengths", None)
+        audio_features = module.get_audio_features(
+                input_features,
+                feature_attention_mask=feature_attention_mask,
+                audio_feature_lengths=audio_feature_lengths,
+            )
+        # audio_features = audio_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        return audio_features
+
+    module.forward = forward.__get__(module, type(module))
 
 def fsdp_main(model, config):
     training_params_cnt = 0
@@ -864,6 +882,8 @@ def fsdp_main(model, config):
         "DFT",
     )
     model_to_train.train()
+    if {"aut"}  == enable_modality:
+        patch_audio_training(model_to_train)
     if need_teacher:
         model_path = train_args.special.get("teacher_path", MODEL_ID)
 
@@ -873,6 +893,8 @@ def fsdp_main(model, config):
         for param in teacher_model.parameters():
             param.requires_grad = False
         teacher_model.config.text_config.use_cache = False
+        if {"aut"}  == enable_modality:
+            patch_audio_training(teacher_model)
         model_to_train.teacher = TeacherModel(teacher_model)
     # Now you can train the model
     # model_to_train.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})

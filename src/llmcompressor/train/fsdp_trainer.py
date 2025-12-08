@@ -105,6 +105,14 @@ class MyTrainer(Trainer):
         if loss_type == "origin":
             return super().compute_loss(model, inputs, **kwargs)
 
+        if loss_type == "mse":
+            labels = inputs.pop("labels", None)
+            ori_logits = self.get_ori_outputs(model, inputs)
+            outputs = model(**inputs)
+            logits = outputs
+            loss = F.mse_loss(logits, ori_logits)
+            return loss
+
         if loss_type == "rkl":
             labels = inputs.pop("labels", None)
             ori_logits = self.get_ori_outputs(model, inputs).logits
@@ -221,7 +229,7 @@ class MyTrainer(Trainer):
         inputs = dict(inputs)
         inputs.pop("labels", None)
 
-        outputs = model.teacher(**inputs, output_hidden_states=True)
+        outputs = model.teacher(**inputs)
         model.teacher._is_root = False
         return outputs
 

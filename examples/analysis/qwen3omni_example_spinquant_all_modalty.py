@@ -363,7 +363,7 @@ def pre_compression_thinker(model):
                         r"re:.*v_proj$",
                         r"re:.*o_proj$",
                         r"re:.*out_proj$",
-                        r"re:.*proj1$",
+                        # r"re:.*proj1$",
                         r"re:.*fc1$",
                         r"re:.*attn\.proj$",
                     ],
@@ -389,7 +389,7 @@ def pre_compression_thinker(model):
                     "targets": [
                         r"re:.*down_proj$",
                         r"re:.*fc2$",
-                        r"re:.*proj2$",
+                        # r"re:.*proj2$",
                     ],
                     "ste": True,
                 },
