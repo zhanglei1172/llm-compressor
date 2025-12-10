@@ -1,7 +1,7 @@
 quant_stage:
   quant_modifiers:
     QuantizationModifier:
-      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:positional_embedding"]
+      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:positional_embedding", "re:.*proj1$", "re:.*proj2$", "re:.*conv_out$"]
       config_groups:
         group_0:
           weights:

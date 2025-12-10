@@ -2,12 +2,12 @@
 seq_len: 2048
 train_args:
     remove_unused_columns: False
-    warmup_steps: 0
+    warmup_steps: 30
     dataloader_drop_last: True
     accelerator_config:
         dispatch_batches: False
     special:
-        loss_type: kl_top # kl_top origin
+        loss_type: mse # kl_top origin
         opt_type: RAdam
         rotate_lr: 0.1361639079805877
         rotate_momentum: 0.0
@@ -15,7 +15,7 @@ train_args:
         smooth_momentum: 0.9
         # teacher_path: 
     # num_train_epochs: 1
-    max_steps: 150
+    max_steps: 300
     save_strategy: 'no'
     seed: 42
     fp16: False
@@ -39,6 +39,7 @@ train_args:
     ddp_find_unused_parameters: True
     fsdp_config:
         activation_checkpointing: True
+        # transformer_layer_cls_to_wrap: "Qwen3OmniMoeThinkerTextDecoderLayer,TeacherModel"
         transformer_layer_cls_to_wrap: "Qwen3OmniMoeThinkerTextDecoderLayer,TeacherModel"
         use_orig_params: True
         sync_module_states: True

@@ -63,40 +63,40 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 ]
 
 #################### configurations ####################
-# recipe = "examples/qwen3_omni_configs/audio/mse.yaml"
-recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
-# flag = "mse"
-flag = "awq"
-fq = True
-realq = False
+recipe = "examples/qwen3_omni_configs/audio/mse_w8a8.yaml"
+# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
+flag = "mse_w8a8"
+# flag = "awq"
+fq = False #True
+realq = True
 #################### configurations ####################
 
 # Select model and load it.
-MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-origin-spinquant-calmoe(aut,)-sym-com-text-trans"
 
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
 )
 dtype = model.dtype
 replace_audio_embedding(model.thinker.audio_tower)
-# replace_rmsnorm(model.thinker.audio_tower)
-# tensor = model.thinker.audio_tower.positional_embedding.weight
-# ori_device = tensor.device
-# ori_shape = tensor.shape
-# model_device = tensor.device
-# Q1 = torch.load(f"{MODEL_ID}/transform_state_dict.pt")[
-#     "audio_tower.positional_embedding.R1_weight_output"
-# ]["weight"].to(dtype=torch.float64, device=model_device)
-# model.thinker.audio_tower.positional_embedding.weight.data = (
-#     (
-#         (tensor - tensor.mean(-1, keepdim=True))
-#         .to(dtype=Q1.dtype, device=model_device)
-#         .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
-#         @ Q1
-#     )
-#     .to(dtype=dtype, device=ori_device)
-#     .reshape(ori_shape)
-# )
+replace_rmsnorm(model.thinker.audio_tower)
+tensor = model.thinker.audio_tower.positional_embedding.weight
+ori_device = tensor.device
+ori_shape = tensor.shape
+model_device = tensor.device
+Q1 = torch.load(f"{MODEL_ID}/transform_state_dict.pt")[
+    "audio_tower.positional_embedding.R1_weight_output"
+]["weight"].to(dtype=torch.float64, device=model_device)
+model.thinker.audio_tower.positional_embedding.weight.data = (
+    (
+        (tensor - tensor.mean(-1, keepdim=True))
+        .to(dtype=Q1.dtype, device=model_device)
+        .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
+        @ Q1
+    )
+    .to(dtype=dtype, device=ori_device)
+    .reshape(ori_shape)
+)
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 
@@ -108,7 +108,7 @@ DATASET_SPLIT = "test"
 
 # Select number of samples. 256 samples is a good place to start.
 # Increasing the number of samples can improve accuracy.
-NUM_CALIBRATION_SAMPLES = 1
+NUM_CALIBRATION_SAMPLES = 256
 MAX_SEQUENCE_LENGTH = 2048
 
 # Load dataset and preprocess.

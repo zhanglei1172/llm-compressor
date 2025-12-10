@@ -1,7 +1,7 @@
 quant_stage:
   quant_modifiers:
     QuantizationModifier:
-      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:positional_embedding", "re:.*conv_out$"]
+      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:positional_embedding", "re:.*conv_out$", "re:.*proj1$", "re:.*proj2$"]
       config_groups:
         group_0:
           weights:
@@ -20,7 +20,32 @@ quant_stage:
             num_bits: 8
             type: int
             symmetric: true
-            strategy: token
-            dynamic: true
+            strategy: tensor
+            dynamic: false
           # input_activations: {num_bits: 8, type: int, symmetric: true, strategy: token, dynamic: true}
-          targets: [Linear]
+          targets: [
+                        "re:.*up_proj$",
+                        "re:.*gate_proj$",
+                        "re:.*q_proj$",
+                        "re:.*k_proj$",
+                        "re:.*v_proj$",
+                        "re:.*o_proj$",
+                        "re:.*out_proj$",
+                        # "re:.*proj1$",
+                        "re:.*fc1$",
+                        "re:.*attn.proj$",
+                    ]
+        group_1:
+          weights:
+            observer: mse
+            observer_kwargs:
+              maxshrink: 0.1
+              patience: 10
+              averaging_constant: 0.05
+              grid: 128.0
+              norm: 2.0
+            num_bits: 8
+            type: int
+            symmetric: true
+            strategy: channel
+          targets: ["re:.*down_proj$", "re:.*fc2$"]
