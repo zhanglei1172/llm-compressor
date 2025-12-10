@@ -14,7 +14,6 @@ from compressed_tensors.quantization import (
     QuantizationStatus,
     quantize,
 )
-from compressed_tensors.utils import align_module_device, update_offload_parameter
 from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.utils.quantization_config import CompressedTensorsConfig
@@ -25,11 +24,11 @@ from llmcompressor.pytorch.utils.helpers import tensor_sparsity
 from llmcompressor.transformers.compression.compressed_tensors_utils import (
     get_model_compressor,
     modify_save_pretrained,
-    untie_word_embeddings,
 )
 from llmcompressor.transformers.compression.sparsity_metadata_config import (
     SparsityConfigMetadata,
 )
+from llmcompressor.utils import untie_word_embeddings
 from tests.testing_utils import requires_gpu
 
 
@@ -65,6 +64,7 @@ def test_sparse_model_reload(compressed, config, dtype, tmp_path):
         splits=splits,
         precision=dtype,
         clear_sparse_session=False,
+        tie_word_embeddings=False,
     )
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -280,56 +280,6 @@ def test_model_reload(offload, torch_dtype, tie_word_embeddings, device, tmp_pat
 )
 def test_model_reload_gpu(offload, torch_dtype, tie_word_embeddings, device, tmp_path):
     test_model_reload(offload, torch_dtype, tie_word_embeddings, device, tmp_path)
-
-
-@pytest.mark.parametrize(
-    "offload,torch_dtype,tie_word_embeddings,device",
-    [
-        (False, torch.float16, False, "cpu"),
-        (False, torch.float32, False, "cpu"),
-        (True, torch.float32, False, "cpu"),
-        (False, torch.float16, True, "cpu"),
-        (False, torch.float32, True, "cpu"),
-        (True, torch.float16, True, "cpu"),
-        (True, torch.float32, True, "cpu"),
-    ],
-)
-def test_model_shared_tensors(offload, torch_dtype, tie_word_embeddings, device):
-    # load model
-    model_path = "nm-testing/tinysmokellama-3.2"
-    model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch_dtype)
-    if offload:
-        model = dispatch_model(model, {"": device}, force_hooks=True)
-    else:
-        model = model.to(device)
-
-    if not tie_word_embeddings:
-        untie_word_embeddings(model)
-
-    # modify lm head
-    with torch.no_grad(), align_module_device(model.lm_head):
-        update_offload_parameter(model.lm_head, "weight", model.lm_head.weight + 1)
-
-    # check that embed_tokens is not modified
-    model_dict = get_state_dict_offloaded_model(model)
-    lm_head = model_dict["lm_head.weight"]
-    embed_tokens = model_dict["model.embed_tokens.weight"]
-    if tie_word_embeddings:
-        assert torch.equal(lm_head, embed_tokens)
-    else:
-        assert not torch.equal(lm_head, embed_tokens)
-
-
-@requires_gpu
-@pytest.mark.parametrize(
-    "offload,torch_dtype,tie_word_embeddings,device",
-    [
-        (False, torch.float32, False, "cuda:0"),
-        (False, torch.float32, True, "cuda:0"),
-    ],
-)
-def test_model_shared_tensors_gpu(offload, torch_dtype, tie_word_embeddings, device):
-    test_model_shared_tensors(offload, torch_dtype, tie_word_embeddings, device)
 
 
 @requires_gpu
