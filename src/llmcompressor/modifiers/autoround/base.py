@@ -183,6 +183,7 @@ class AutoRoundModifier(Modifier, QuantizationMixin):
             if not self.ended_:
                 self.on_end(state, None)
 
+    @torch.no_grad()
     def apply_autoround(self, state, subgraph):
         """
         Applies AutoRound quantization tuning on the current decoding layer.
@@ -224,6 +225,8 @@ class AutoRoundModifier(Modifier, QuantizationMixin):
                 iters=self.iters,
                 enable_torch_compile=self.enable_torch_compile,
                 batch_size=self.batch_size,
+                low_gpu_mem_usage=True,
+                mm=False,
             )
             # TODO: configure layer-wise config based on self.resolved_config
             ar.configure_layer_config(enable_gguf_official_mixed=False)
@@ -241,17 +244,18 @@ class AutoRoundModifier(Modifier, QuantizationMixin):
                 # Leave offload for LLMC
                 auto_offload=False,
             )
-            self._q_input = q_input
-            # Update offload parameters and remove temporary attributes
-            for _, module in decoding_layer.named_modules():
-                if hasattr(module, "weight_scale") and hasattr(
-                    module, "weight_zero_point"
-                ):
-                    # Note: The model's weight is already q-dq in-place by auto-round.
-                    weight_scale = module.scale
-                    del module.scale
-                    # TODO: update zero_point after supporting asymmetric quantization
-                    update_offload_parameter(module, "weight_scale", weight_scale)
+        self._q_input = q_input
+        # Update offload parameters and remove temporary attributes
+        decoding_layer.to(wrapped_model.dtype)
+        for _, module in decoding_layer.named_modules():
+            if hasattr(module, "weight_scale") and hasattr(
+                module, "weight_zero_point"
+            ):
+                # Note: The model's weight is already q-dq in-place by auto-round.
+                weight_scale = module.scale
+                del module.scale
+                # TODO: update zero_point after supporting asymmetric quantization
+                update_offload_parameter(module, "weight_scale", weight_scale)
         decoding_layer.eval()
 
     def post_autoround_cleanup(self):
@@ -314,10 +318,10 @@ class AutoRoundModifier(Modifier, QuantizationMixin):
             ), f"Expected QuantizationScheme, got {type(scheme)}"
             quant_scheme = scheme
         weight_args = quant_scheme.weights
-        assert weight_args.strategy == QuantizationStrategy.GROUP, (
-            "Only group-wise quantization is supported in AutoRoundModifier for now, "
-            f"got {weight_args.strategy}"
-        )
+        # assert weight_args.strategy == QuantizationStrategy.GROUP, (
+        #     "Only group-wise quantization is supported in AutoRoundModifier for now, "
+        #     f"got {weight_args.strategy}"
+        # )
         assert quant_scheme.input_activations is None, (
             "Input activation quantization is not supported in AutoRoundModifier, "
             f"got {quant_scheme.input_activations}"
@@ -329,7 +333,7 @@ class AutoRoundModifier(Modifier, QuantizationMixin):
         ar_quant_scheme = ARQuantizationScheme(
             bits=weight_args.num_bits,
             sym=weight_args.symmetric,
-            group_size=weight_args.group_size,
+            group_size=weight_args.group_size if weight_args.group_size else -1,
             data_type=weight_args.type,
             act_bits=16,
         )
