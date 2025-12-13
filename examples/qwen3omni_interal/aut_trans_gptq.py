@@ -44,6 +44,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = (
     mappings.SpinQuantMapping(
         mm_proj=["conv_out"],
         embedding="re:.*positional_embedding$",
+        attn="re:.*self_attn$",
         # embedding="conv_out",
         attn_q="re:.*q_proj$",
         attn_k="re:.*k_proj$",
@@ -304,7 +305,7 @@ with contextlib.ExitStack() as stack:
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
         num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        calibrate_moe_context=True,
+        
         sequential_targets=["Qwen3OmniMoeAudioEncoderLayer"],
     )
 

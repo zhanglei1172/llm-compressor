@@ -75,6 +75,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
     mappings.SpinQuantMapping(
         mm_proj=[r"re:.*audio_tower\.proj2$", r"re:.*visual\.merger.*mlp\.2$"],
         embedding="re:.*embed_tokens$",
+        attn="re:.*self_attn$",
         attn_q="re:.*model.*q_proj$",
         attn_k="re:.*model.*k_proj$",
         attn_v="re:.*model.*v_proj$",
@@ -113,6 +114,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = (
     mappings.SpinQuantMapping(
         mm_proj=["patch_embed.proj"],
         embedding="pos_embed",
+        attn="re:.*attn$",
         # embedding="conv_out",
         attn_q="re:.*q_proj$",
         attn_k="re:.*k_proj$",
@@ -142,6 +144,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = (
     mappings.SpinQuantMapping(
         mm_proj=["conv_out"],
         embedding="re:.*positional_embedding$",
+        attn="re:.*self_attn$",
         # embedding="conv_out",
         attn_q="re:.*q_proj$",
         attn_k="re:.*k_proj$",
@@ -168,7 +171,6 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 ]
 
 #################### configurations ####################
-calibrate_moe_context = True
 # Select model and load it.
 pretrain = "origin"
 flag = "spinquant"
@@ -187,8 +189,6 @@ if pretrain == "ostq":
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
-if calibrate_moe_context:
-    flag += "-calmoe"
 flag += str(tuple(enable_modality)).replace("'","")
 
 SAVE_DIR = (

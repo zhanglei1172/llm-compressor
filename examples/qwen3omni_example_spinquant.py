@@ -72,6 +72,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
     mappings.SpinQuantMapping(
         mm_proj=[r"re:.*audio_tower\.proj2$", r"re:.*visual\.merger.*mlp\.2$"],
         embedding="re:.*embed_tokens$",
+        attn="re:.*self_attn$",
         attn_q="re:.*model.*q_proj$",
         attn_k="re:.*model.*k_proj$",
         attn_v="re:.*model.*v_proj$",
@@ -107,7 +108,6 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
 ]
 
 #################### configurations ####################
-calibrate_moe_context = True
 # Select model and load it.
 pretrain = "ostq"
 recipe = "examples/qwen3_omni_configs/text/spinquant.yaml"
@@ -122,8 +122,6 @@ if pretrain == "ostq":
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
-if calibrate_moe_context:
-    flag += "-calmoe"
 
 MAX_SEQUENCE_LENGTH = 2048
 # Load dataset and preprocess.

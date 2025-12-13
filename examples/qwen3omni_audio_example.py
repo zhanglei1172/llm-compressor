@@ -38,6 +38,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = (
         mm_proj=["conv_out"],
         embedding="re:.*positional_embedding$",
         # embedding="conv_out",
+        attn="re:.*self_attn$",
         attn_q="re:.*q_proj$",
         attn_k="re:.*k_proj$",
         attn_v="re:.*v_proj$",
@@ -72,7 +73,7 @@ realq = True
 #################### configurations ####################
 
 # Select model and load it.
-MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-origin-spinquant-calmoe(aut,)-sym-com-text-trans"
+MODEL_ID = "/dataset/workspace/zhangl98/qwenomni-exp/internal-aut-trans-mse/"
 
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
@@ -295,7 +296,7 @@ with contextlib.ExitStack() as stack:
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
         num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        calibrate_moe_context=True,
+        
         sequential_targets=["Qwen3OmniMoeAudioEncoderLayer"],
     )
 

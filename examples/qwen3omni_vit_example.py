@@ -22,9 +22,9 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
 
 from llmcompressor import oneshot
 from llmcompressor.modeling.qwen3_omni_moe import (
+    replace_rmsnorm,
     replace_vit_attention,
     replace_vit_attention_inv,
-    replace_rmsnorm,
 )
 from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
@@ -38,6 +38,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = (
     mappings.SpinQuantMapping(
         mm_proj=["patch_embed.proj"],
         embedding="pos_embed",
+        attn="re:.*attn$",
         # embedding="conv_out",
         attn_q="re:.*q_proj$",
         attn_k="re:.*k_proj$",
@@ -205,7 +206,7 @@ with contextlib.ExitStack() as stack:
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
         num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        calibrate_moe_context=True,
+        
         sequential_targets=["Qwen3OmniMoeVisionBlock"],
         # pipeline="basic",
     )
