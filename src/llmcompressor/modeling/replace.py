@@ -23,11 +23,18 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
         eps=module.eps,
         elementwise_affine=module.elementwise_affine,
         device=next(module.parameters()).device,
-        dtype=next(module.parameters()).dtype
+        dtype=next(module.parameters()).dtype,
     )
     rmsnorm.weight.requires_grad = module.weight.requires_grad
     if hasattr(module, "_hf_hook"):
+        if module._hf_hook.offload:
+            original_devices = module._hf_hook.original_devices.copy()
         add_hook_to_module(rmsnorm, module._hf_hook)
+        if rmsnorm._hf_hook.offload:
+            rmsnorm._hf_hook.original_devices = {
+                k: original_devices[k] if k in original_devices else v
+                for k, v in rmsnorm._hf_hook.original_devices.items()
+            }
 
     exec_device = get_execution_device(module)
     with align_module_device(module, exec_device):
