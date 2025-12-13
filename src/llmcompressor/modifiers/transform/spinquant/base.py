@@ -24,9 +24,9 @@ from llmcompressor.modeling.replace import (
     replace_parametrizations_to_weights,
 )
 from llmcompressor.modifiers import Modifier
-from llmcompressor.utils.pytorch.module import get_module_name
 from llmcompressor.typing import NamedModules
 from llmcompressor.utils import untie_word_embeddings
+from llmcompressor.utils.pytorch.module import get_module_name
 
 from .mappings import SpinQuantMapping, infer_mapping_from_model
 from .norm_mappings import NormMapping, infer_norm_mapping_from_model
@@ -96,7 +96,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
     do_fold: bool = Field(default=True)
     backe_mean: bool = Field(default=False)
     rotations: List[SpinquantRotation] = Field(default_factory=lambda: ["R1", "R2"])
-    transform_type: Literal["hadamard", "random-hadamard", "random-matrix"] = Field(
+    transform_type: Literal["hadamard", "random-hadamard", "random-matrix", "identity"] = Field(
         default="hadamard"
     )
     randomize: bool = Field(default=False)
@@ -246,7 +246,11 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
             for norm, *linears in match_modules_set(
                 model, (mapping.norm, *mapping.linears)
             ):
-                fuse_norm_linears(norm, linears)
+                norm = norm[0]
+                linears_flatten = []
+                for linear in linears:
+                    linears_flatten.extend(linear)
+                fuse_norm_linears(norm, linears_flatten)
                 name = get_module_name(model, norm)
                 replace_ln_to_rmsnorm(name, norm, model)
 
