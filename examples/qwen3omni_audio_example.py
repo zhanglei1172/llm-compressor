@@ -1,5 +1,7 @@
 import contextlib
 import copy
+import os
+from collections import OrderedDict
 
 import torch
 from accelerate.hooks import remove_hook_from_module
@@ -64,40 +66,45 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 ]
 
 #################### configurations ####################
-recipe = "examples/qwen3_omni_configs/audio/mse_w8a8.yaml"
-# recipe = "examples/qwen3_omni_configs/audio/awq.yaml"
-flag = "mse_w8a8"
+# recipe = "examples/qwen3_omni_configs/audio/mse_w8a8.yaml"
+recipe = "examples/qwen3_omni_configs/audio/quarot.yaml"
+flag = "quarot"
 # flag = "awq"
-fq = False #True
-realq = True
+fq = False  # True
+realq = False
 #################### configurations ####################
 
 # Select model and load it.
-MODEL_ID = "/dataset/workspace/zhangl98/qwenomni-exp/internal-aut-trans-mse/"
+MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
 )
 dtype = model.dtype
 replace_audio_embedding(model.thinker.audio_tower)
-replace_rmsnorm(model.thinker.audio_tower)
 tensor = model.thinker.audio_tower.positional_embedding.weight
 ori_device = tensor.device
 ori_shape = tensor.shape
 model_device = tensor.device
-Q1 = torch.load(f"{MODEL_ID}/transform_state_dict.pt")[
-    "audio_tower.positional_embedding.R1_weight_output"
-]["weight"].to(dtype=torch.float64, device=model_device)
-model.thinker.audio_tower.positional_embedding.weight.data = (
-    (
-        (tensor - tensor.mean(-1, keepdim=True))
-        .to(dtype=Q1.dtype, device=model_device)
-        .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
-        @ Q1
+if os.path.exists(f"{MODEL_ID}/transform_state_dict.pt"):
+    replace_rmsnorm(model.thinker.audio_tower)
+    transform_state_dict = torch.load(f"{MODEL_ID}/transform_state_dict.pt")
+    Q1 = transform_state_dict["audio_tower.positional_embedding.R1_weight_output"][
+        "weight"
+    ].to(dtype=torch.float64, device=model_device)
+    model.thinker.audio_tower.positional_embedding.weight.data = (
+        (
+            (tensor - tensor.mean(-1, keepdim=True))
+            .to(dtype=Q1.dtype, device=model_device)
+            .reshape(-1, ori_shape[-1] // Q1.shape[0], Q1.shape[0])
+            @ Q1
+        )
+        .to(dtype=dtype, device=ori_device)
+        .reshape(ori_shape)
     )
-    .to(dtype=dtype, device=ori_device)
-    .reshape(ori_shape)
-)
+else:
+    transform_state_dict = OrderedDict()
+
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 
@@ -296,7 +303,6 @@ with contextlib.ExitStack() as stack:
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
         num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        
         sequential_targets=["Qwen3OmniMoeAudioEncoderLayer"],
     )
 
@@ -306,10 +312,8 @@ sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
     }
 )
 
-from collections import OrderedDict
 
 _h = set()
-transform_state_dict = OrderedDict()
 from compressed_tensors.transform.factory.base import TransformBase
 
 for name, module in model.thinker.named_modules():
@@ -420,9 +424,9 @@ for _, module in match_named_modules(
     model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore
 ):
     if hasattr(module, "quantization_status"):
-        assert (
-            module.quantization_status == QuantizationStatus.FROZEN
-        ), f"{module.quantization_status}"
+        assert module.quantization_status == QuantizationStatus.FROZEN, (
+            f"{module.quantization_status}"
+        )
         quantized_name_set.add(re.sub(r"\d+", "X", _))
         scheme = getattr(module, "quantization_scheme", None)
         if fq:

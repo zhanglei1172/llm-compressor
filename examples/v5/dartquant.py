@@ -51,6 +51,9 @@ from torch.nn.utils.parametrize import is_parametrized
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+    Qwen2_5_VLForConditionalGeneration,
+)
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
 )
@@ -78,72 +81,72 @@ from llmcompressor.utils.pytorch.module import (
 )
 
 torch.fx.experimental._config.meta_nonzero_assume_all_nonzero = True
-# awq_mappings.AWQ_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = awq_mappings._moe_default_mappings
+
 USE_AUDIO_IN_VIDEO = True
 
 
-mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = (
+mappings.SPINQUANT_MAPPING_REGISTRY["Qwen2_5_VLForConditionalGeneration"] = (
     mappings.SpinQuantMapping(
-        mm_proj=[r"re:.*audio_tower\.proj2$", r"re:.*visual\.merger.*mlp\.2$"],
+        mm_proj=[r"re:.*visual\.merger.*mlp\.2$"],
         embedding="re:.*embed_tokens$",
         attn="re:.*self_attn$",
-        attn_q="re:.*model.*q_proj$",
-        attn_k="re:.*model.*k_proj$",
-        attn_v="re:.*model.*v_proj$",
-        attn_o="re:.*model.*o_proj$",
-        mlp_in=[r"re:.*mlp\.gate$"]
-        + [
-            rf"re:.*model.*\.{i}\.{x}$"
-            for x in ["up_proj", "gate_proj"]
-            for i in range(128)
+        attn_q="re:.*language_model.*q_proj$",
+        attn_k="re:.*language_model.*k_proj$",
+        attn_v="re:.*language_model.*v_proj$",
+        attn_o="re:.*language_model.*o_proj$",
+        mlp_in=[
+            r"re:.*language_model.*mlp\.up_proj$",
+            r"re:.*language_model.*mlp\.gate_proj$",
         ],
-        mlp_out=[rf"re:.*model.*\.{i}\.down_proj$" for i in range(128)],
+        mlp_out=[r"re:.*language_model.*mlp\.down_proj$"],
         lm_head="lm_head",
     )
 )
-norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration"] = [
+norm_mappings.NORM_MAPPING_REGISTRY["Qwen2_5_VLForConditionalGeneration"] = [
     norm_mappings.NormMapping(
-        norm="re:.*model.*input_layernorm$",
-        linears=["re:.*model.*q_proj$", "re:.*model.*k_proj$", "re:.*model.*v_proj$"],
-    ),
-    norm_mappings.NormMapping(
-        norm="re:.*model.*post_attention_layernorm$",
-        linears=[r"re:.*mlp\.gate$"]
-        + [
-            rf"re:.*model.*\.{i}\.{x}$"
-            for x in ["up_proj", "gate_proj"]
-            for i in range(128)
+        norm="re:.*language_model.*input_layernorm$",
+        linears=[
+            "re:.*language_model.*q_proj$",
+            "re:.*language_model.*k_proj$",
+            "re:.*language_model.*v_proj$",
         ],
     ),
     norm_mappings.NormMapping(
-        norm="model.norm",
+        norm="re:.*language_model.*post_attention_layernorm$",
+        linears=[
+            r"re:.*language_model.*mlp\.up_proj$",
+            r"re:.*language_model.*mlp\.gate_proj$",
+        ],
+    ),
+    norm_mappings.NormMapping(
+        norm="model.language_model.norm",
         linears=["lm_head"],
     ),
 ]
 
-mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = (
+mappings.SPINQUANT_MAPPING_REGISTRY["Qwen2_5_VisionTransformerPretrainedModel"] = (
     mappings.SpinQuantMapping(
-        mm_proj=["patch_embed.proj"],
-        embedding="pos_embed",
+        mm_proj=["patch_embed"],
+        embedding=[],
         attn="re:.*attn$",
         # embedding="conv_out",
         attn_q="re:.*q_proj$",
         attn_k="re:.*k_proj$",
         attn_v="re:.*v_proj$",
         attn_o=r"re:.*attn\.proj$",
-        mlp_in=["re:.*linear_fc1$"],
-        mlp_out=["re:.*linear_fc2$"],
+        mlp_in=[r"re:.*mlp\.up_proj$", r"re:.*mlp\.gate_proj$"],
+        mlp_out=[r"re:.*mlp\.down_proj$"],
         lm_head=[r"re:merger.*mlp\.0$"],
     )
 )
-norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = [
+norm_mappings.NORM_MAPPING_REGISTRY["Qwen2_5_VisionTransformerPretrainedModel"] = [
     norm_mappings.NormMapping(
         norm="re:.*norm1$",
         linears=["re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$"],
     ),
     norm_mappings.NormMapping(
         norm="re:.*norm2$",
-        linears=["re:.*fc1$"],
+        linears=[r"re:.*mlp\.up_proj$", r"re:.*mlp\.gate_proj$"],
     ),
     norm_mappings.NormMapping(
         norm="re:.*ln_q$",
@@ -151,54 +154,23 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = [
     ),
 ]
 
-mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = (
-    mappings.SpinQuantMapping(
-        mm_proj=["conv_out"],
-        embedding="re:.*positional_embedding$",
-        attn="re:.*self_attn$",
-        # embedding="conv_out",
-        attn_q="re:.*q_proj$",
-        attn_k="re:.*k_proj$",
-        attn_v="re:.*v_proj$",
-        attn_o="re:.*out_proj$",
-        mlp_in=["re:.*fc1$"],
-        mlp_out=["re:.*fc2$"],
-        lm_head="proj1",
-    )
-)
-norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
-    norm_mappings.NormMapping(
-        norm="re:.*self_attn_layer_norm$",
-        linears=["re:.*q_proj$", "re:.*k_proj$", "re:.*v_proj$"],
-    ),
-    norm_mappings.NormMapping(
-        norm="re:.*final_layer_norm$",
-        linears=["re:.*fc1$"],
-    ),
-    norm_mappings.NormMapping(
-        norm="ln_post",
-        linears=["proj1"],
-    ),
-]
-
 #################### configurations ####################
 # Select model and load it.
 pretrain = "origin"
 flag = "dartquant"
-NUM_CALIBRATION_SAMPLES = 256
+NUM_CALIBRATION_SAMPLES = 128
 enable_modality = {
     # "vit",
-    "aut",
-    # "text"
+    "text"
 }
 #################### configurations ####################
 
 model_dtype = torch.bfloat16
 
-MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen2.5-VL-7B-Instruct/"
 
 
-flag += str(tuple(enable_modality)).replace("'", "")
+flag += str(tuple(enable_modality)).replace("'", "").replace(",", "|")
 
 SAVE_DIR = (
     "/tmp/" + MODEL_ID.rstrip("/").split("/")[-1] + f"-{pretrain}-{flag}" + "-trans"
@@ -208,26 +180,19 @@ MAX_SEQUENCE_LENGTH = 2048
 # Load dataset and preprocess.
 # ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
 ds_vl = load_dataset(
-    "lmms-lab/LLaVA-OneVision-Data", "FigureQA(MathV360K)", split="train[:128]"
+    "lmms-lab/LLaVA-OneVision-Data",
+    "FigureQA(MathV360K)",
+    split=f"train[:{NUM_CALIBRATION_SAMPLES}]",
 )
-ds_al = load_dataset(
-    "/dataset/workspace/zhangl98/dataset/peoples_speech/test", split="test[:128]"
+ds_text = load_dataset(
+    "hkust-nlp/deita-6k-v0", split=f"train[:{NUM_CALIBRATION_SAMPLES}]"
 )
-ds_text = load_dataset("hkust-nlp/deita-6k-v0", split="train[:128]")
 ds_wiki = load_from_disk("/dataset/workspace/zhangl98/dataset/calib/wikitext2/")
 
 
 def encode_base64_img(img) -> str:
     with BytesIO() as buffer:
         img.save(buffer, format="PNG")
-        data = buffer.getvalue()
-
-    return base64.b64encode(data).decode("utf-8")
-
-
-def encode_base64_audio(audio_array: np.ndarray, sampling_rate: int) -> str:
-    with BytesIO() as buffer:
-        sf.write(buffer, audio_array, samplerate=sampling_rate, format="WAV")
         data = buffer.getvalue()
 
     return base64.b64encode(data).decode("utf-8")
@@ -302,37 +267,6 @@ def format_as_messages(example):
     }
 
 
-def format_as_al_messages(example, prompt: str | None = None):
-    """Format single example into messages format for TRL."""
-    if not prompt:
-        prompt = "Please transcribe the audio."
-    labels = example["text"]
-    # example["audio"]["array"] is numpy array, convert it to base64
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "audio",
-                    "audio": f"data:audio/wav;base64,{encode_base64_audio(example['audio']['array'], example['audio']['sampling_rate'])}",
-                    "image": None,
-                },
-                {
-                    "type": "text",
-                    "text": prompt,
-                },
-            ],
-        },
-        {
-            "role": "assistant",
-            "content": [{"type": "text", "text": labels.capitalize()}],
-        },
-    ]
-    return {
-        "messages": messages,
-    }
-
-
 def format_as_text_messages(example, prompt: str | None = None):
     """Format single example into messages format for TRL."""
     problem = example["problem"]
@@ -351,12 +285,6 @@ ds_vl = ds_vl.map(
     # fn_kwargs={"prompt": "What does the image show?"},
 )
 
-ds_al = ds_al.map(
-    format_as_al_messages,
-    remove_columns=ds_al.column_names,
-    # num_proc=6,
-    fn_kwargs={"prompt": "Please transcribe the audio."},
-)
 ds_text = ds_text.map(
     format_as_messages,
     remove_columns=ds_text.column_names,
@@ -372,7 +300,6 @@ target_features = Features(
             {
                 "content": [
                     {
-                        "audio": Value(dtype="string"),
                         "image": Value(dtype="string"),
                         "text": Value(dtype="string"),
                         "type": Value(dtype="string"),
@@ -387,8 +314,6 @@ target_features = Features(
 ds = []
 if "vit" in enable_modality:
     ds.append(ds_vl)
-if "aut" in enable_modality:
-    ds.append(ds_al)
 if "text" in enable_modality:
     ds.append(ds_text)
 ds = concatenate_datasets(ds)
@@ -399,10 +324,10 @@ ds = ds.shuffle(seed=42)
 def pre_compression_thinker_vit(model):
     from llmcompressor.modeling.qwen3_omni_moe import replace_vit_attention
 
-    replace_vit_attention(model.thinker.visual)
+    replace_vit_attention(model.model.visual)
     state = State()
     state.update(
-        model=model.thinker.visual,
+        model=model.model.visual,
     )
     recipe_ = [
         SpinQuantModifier(
@@ -416,60 +341,16 @@ def pre_compression_thinker_vit(model):
         )
     ]
 
-    _tmp_config = copy.deepcopy(model.thinker.visual.config)
+    _tmp_config = copy.deepcopy(model.model.visual.config)
     _tmp_config.update({"head_dim": _tmp_config.hidden_size // _tmp_config.num_heads})
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(
-            helpers.patch_attr(model.thinker.visual, "config", _tmp_config)
+            helpers.patch_attr(model.model.visual, "config", _tmp_config)
         )
         for mod in recipe_:
             mod.on_initialize(state=state)
-        # for param in model.thinker.visual.parameters():
-        #     param.requires_grad = False
-        recipe_[0].on_start(state=state, event=None)
-
-    return state, recipe_, model
-
-
-@torch.no_grad()
-def pre_compression_thinker_aut(model):
-    from llmcompressor.modeling.qwen3_omni_moe import replace_audio_embedding
-
-    replace_audio_embedding(model.thinker.audio_tower)
-    model.thinker.audio_tower.positional_embedding.positional_embedding = (
-        model.thinker.audio_tower.positional_embedding.weight
-    )
-    # session = active_session()
-    # session.reset()
-    state = State()
-    state.update(
-        model=model.thinker.audio_tower,
-    )
-    recipe_ = [
-        SpinQuantModifier(
-            do_fold=False,
-            backe_mean=True,
-            learnable=True,
-            rotations=["R1", "R2"],
-            transform_block_size_R1=1280,
-            transform_type="identity",
-            sequential_onload=True,
-        )
-    ]
-
-    _tmp_config = copy.deepcopy(model.thinker.audio_tower.config)
-    _tmp_config.update(
-        {"head_dim": _tmp_config.d_model // _tmp_config.encoder_attention_heads}
-    )
-
-    with contextlib.ExitStack() as stack:
-        stack.enter_context(
-            helpers.patch_attr(model.thinker.audio_tower, "config", _tmp_config)
-        )
-        for mod in recipe_:
-            mod.on_initialize(state=state)
-        # for param in model.thinker.audio_tower.parameters():
+        # for param in model.model.visual.parameters():
         #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
 
@@ -482,7 +363,7 @@ def pre_compression_thinker_text(model):
     # session.reset()
     state = State()
     state.update(
-        model=model.thinker,
+        model=model,
     )
     recipe_ = [
         SpinQuantModifier(
@@ -490,124 +371,18 @@ def pre_compression_thinker_text(model):
             backe_mean=False,
             learnable=True,
             rotations=["R1", "R2"],
-            transform_block_size_R1=2048,
+            transform_block_size_R1=3584,
             transform_type="identity",
             sequential_onload=True,
         )
     ]
-    _tmp_config = copy.deepcopy(model.thinker.config)
-    _tmp_config.update(model.thinker.config.text_config.to_dict())
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(helpers.patch_attr(model.thinker, "config", _tmp_config))
         for mod in recipe_:
             mod.on_initialize(state=state)
-        # for param in model.thinker.model.parameters():
+        # for param in model.model.parameters():
         #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
-
-    return state, recipe_, model
-
-
-@torch.no_grad()
-def pre_compression_thinker_text_sequential(model):
-    from compressed_tensors.utils import remove_dispatch
-
-    def preprocess(example):
-        conversations = [
-            [
-                {
-                    "role": turn["role"],
-                    "content": [
-                        {k: v for k, v in content.items() if v is not None}
-                        for content in turn["content"]
-                    ],
-                }
-                for turn in example["messages"]
-            ]
-        ]
-        # conversations = [example["messages"] for example in examples]
-        text = processor.apply_chat_template(
-            conversations, add_generation_prompt=True, tokenize=False
-        )
-        audios, images, videos = process_mm_info(
-            conversations, use_audio_in_video=USE_AUDIO_IN_VIDEO
-        )
-        return processor(
-            text=text,
-            audio=audios,
-            images=images,
-            videos=videos,
-            return_tensors="pt",
-            padding=True,
-            use_audio_in_video=USE_AUDIO_IN_VIDEO,
-        )
-
-    ds = ds_vl.map(preprocess, remove_columns=ds_vl.column_names)
-
-    def data_collator(batch):
-        assert len(batch) == 1
-        return {
-            key: torch.tensor(
-                value, dtype=model_dtype if key == "pixel_values" else None
-            )
-            for key, value in batch[0].items()
-        }
-
-    original_init = SequentialTracer.__init__
-
-    def my_init(self, ancestors, offloaded):
-        original_init(
-            self,
-            ancestors,
-            offloaded,
-        )
-        # Force onload all modules.
-        device = get_execution_device(model)
-        remove_hook_from_module(model.thinker.visual.pos_embed, recurse=True)
-        model.thinker.visual.pos_embed.to(device)
-        for module in model.thinker.visual.pos_embed.modules():
-            if module in self.offloaded:
-                self.offloaded.remove(module)
-
-    state = State()
-    state.update(
-        model=model.thinker,
-    )
-
-    # for param in model.thinker.model.parameters():
-    #     param.requires_grad = False
-
-    recipe_ = [
-        SpinQuantModifier(
-            do_fold=False,
-            backe_mean=False,
-            learnable=True,
-            rotations=["R1", "R2"],
-            transform_block_size_R1=2048,
-            transform_type="identity",
-        )
-    ]
-    _tmp_config = copy.deepcopy(model.thinker.config)
-    _tmp_config.update(model.thinker.config.text_config.to_dict())
-
-    ori_save = model.save_pretrained
-    with contextlib.ExitStack() as stack:
-        stack.enter_context(helpers.patch_attr(SequentialTracer, "__init__", my_init))
-        stack.enter_context(helpers.patch_attr(model.thinker, "config", _tmp_config))
-        oneshot(
-            model=model.thinker,
-            processor=model.config._name_or_path,
-            dataset=ds,
-            recipe=recipe_,
-            tie_word_embeddings=True,
-            data_collator=data_collator,
-            max_seq_length=MAX_SEQUENCE_LENGTH,
-            num_calibration_samples=1,
-            sequential_targets=["Qwen3OmniMoeThinkerTextDecoderLayer"],
-        )
-        remove_dispatch(model)
-    model.save_pretrained = ori_save
 
     return state, recipe_, model
 
@@ -652,6 +427,8 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
             return_tensors="pt",
             padding=True,
             use_audio_in_video=USE_AUDIO_IN_VIDEO,
+            truncation=True,
+            max_length=MAX_SEQUENCE_LENGTH,
         )
 
         labels = (
@@ -671,7 +448,10 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
                         for i, assistant_end_token in enumerate(
                             self.assistant_end_tokens[1:], 1
                         ):
-                            if token_ids[pos + i] != assistant_end_token:
+                            if (
+                                pos + i >= len(token_ids)
+                                or token_ids[pos + i] != assistant_end_token
+                            ):
                                 is_assistant_end = False
                                 break
                         if is_assistant_end:  # End of the assistant response
@@ -692,7 +472,10 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
                         for i, assistant_start_token in enumerate(
                             self.assistant_start_tokens[1:], 1
                         ):
-                            if token_ids[pos + i] != assistant_start_token:
+                            if (
+                                pos + i >= len(token_ids)
+                                or token_ids[pos + i] != assistant_start_token
+                            ):
                                 is_assistant_start = False
                                 break
                         if is_assistant_start:
@@ -713,12 +496,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
 
 @torch.no_grad()
 def post_compression_thinker_vit(model):
-    replace_vit_attention_inv(model.thinker.visual)
-
-
-@torch.no_grad()
-def post_compression_thinker_aut(model):
-    delattr(model.thinker.audio_tower.positional_embedding, "positional_embedding")
+    replace_vit_attention_inv(model.model.visual)
 
 
 @torch.no_grad()
@@ -734,7 +512,7 @@ def post_compression_thinker(model, processor):
     _h = set()
     transform_state_dict = OrderedDict()
 
-    for name, module in model.thinker.named_modules():
+    for name, module in model.named_modules():
         if isinstance(module, TransformBase):
             if module in _h or id(module.scheme) in _h:
                 continue
@@ -743,7 +521,7 @@ def post_compression_thinker(model, processor):
             transform_state_dict.update({name: module.state_dict()})
 
     to_removes = []
-    for name, module in model.thinker.named_modules():
+    for name, module in model.named_modules():
         for child_name, child_module in module.named_children():
             if isinstance(child_module, TransformBase):
                 to_removes.append((module, child_name))
@@ -754,8 +532,7 @@ def post_compression_thinker(model, processor):
 
     if "vit" in enable_modality:
         post_compression_thinker_vit(model)
-    if "aut" in enable_modality:
-        post_compression_thinker_aut(model)
+
     if "text" in enable_modality:
         post_compression_thinker_text(model)
 
@@ -770,8 +547,8 @@ def dist_load_model(model_path=MODEL_ID, load_processor=False):
 
     if load_processor:
         processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
-    model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
-        model_path, torch_dtype="auto"
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        model_path, torch_dtype=model_dtype
     )
     return model, processor
 
@@ -809,7 +586,7 @@ def regist_hook(model, stat_tensors):
             d[src_id] = x.detach().cpu()
 
     hooks = []
-    for name, m in model.thinker.named_modules():
+    for name, m in model.named_modules():
         if is_parametrized(m):
             for name, subm in m.named_children():
                 if name.endswith("_weight_input"):  # TransformLocation.WEIGHT_OUTPUT
@@ -829,7 +606,7 @@ def regist_hook(model, stat_tensors):
 
 
 def inference_model(model):
-    dispatch_for_generation(model.thinker)
+    dispatch_for_generation(model)
     train_processor = AutoProcessor.from_pretrained(
         pretrained_model_name_or_path=MODEL_ID,
         model_max_length=MAX_SEQUENCE_LENGTH,
@@ -848,10 +625,10 @@ def inference_model(model):
 
     for batch in tqdm(dataloader):
         with torch.no_grad():
-            batch = {k: v.to(model.thinker.device) for k, v in batch.items()}
-            _ = model.thinker(**batch)
+            batch = {k: v.to(model.device) for k, v in batch.items()}
+            _ = model(**batch)
             # stat_tensors holds CPU tensors already; nothing to cast per-batch.
-    remove_dispatch(model.thinker)
+    remove_dispatch(model)
 
 
 def train_rotate(
@@ -1048,12 +825,11 @@ if __name__ == "__main__":
             param.requires_grad = False
         if "vit" in enable_modality:
             state_vit, recipe_vit, model = pre_compression_thinker_vit(model)
-        if "aut" in enable_modality:
-            state_aut, recipe_aut, model = pre_compression_thinker_aut(model)
+
         if "text" in enable_modality:
             state_text, recipe_text, model = pre_compression_thinker_text(model)
 
-        weight_tied_name_map = build_weight_tied_map_with_unionfind(model.thinker)
+        weight_tied_name_map = build_weight_tied_map_with_unionfind(model)
         # Map from weight_id -> {src_data_ptr: cpu_tensor}
         stat_tensors = defaultdict(dict)
         hooks = regist_hook(model, stat_tensors)
@@ -1061,13 +837,13 @@ if __name__ == "__main__":
         for h in hooks:
             h.remove()
         for module_name, param_name in set(weight_tied_name_map.values()):
-            module = model.thinker.get_submodule(module_name)
-            param = model.thinker.get_parameter(f"{module_name}.{param_name}")
+            module = model.get_submodule(module_name)
+            param = model.get_parameter(f"{module_name}.{param_name}")
             R = train_rotate(
                 name=f"{module_name}.{param_name}",
                 transform_module=module,
                 train_datas=list(stat_tensors[id(param)].values()),
-                optim="adam",
+                optim="sgd",
                 lr=1.5e-3,
                 mom=0.9,
                 cos_lr=False,
@@ -1082,8 +858,7 @@ if __name__ == "__main__":
         # state, recipe_, model = pre_compression_thinker(model)
         if "vit" in enable_modality:
             recipe_vit[0]._fold_transforms_into_weights(state_vit.model)
-        if "aut" in enable_modality:
-            recipe_aut[0]._fold_transforms_into_weights(state_aut.model)
+
         if "text" in enable_modality:
             recipe_text[0]._fold_transforms_into_weights(state_text.model)
 

@@ -1,0 +1,18 @@
+quant_stage:
+  quant_modifiers:
+
+    AutoRoundModifier:
+      ignore: ["re:lm_head"]
+      iters: 200
+      enable_torch_compile: false
+
+      config_groups:
+        group_0:
+          weights:
+            num_bits: 4
+            type: int
+            symmetric: true
+            strategy: channel
+          input_activations:
+          output_activations:
+          targets: [Linear]

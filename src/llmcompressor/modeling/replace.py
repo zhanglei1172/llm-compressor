@@ -73,4 +73,15 @@ def replace_parametrizations_to_weights(model: torch.nn.Module):
         if is_parametrized(module):
             change_keys = list(module.parametrizations.keys())
             for key in change_keys:
+                if not hasattr(module, "_hf_hook"):
+                    original_device = module.parametrizations[key].original.device
+                    module.parametrizations[
+                        key
+                    ].original.data = module.parametrizations[key].original.data.to(
+                        device="cuda"
+                    )
                 remove_parametrizations(module, key)
+                if not hasattr(module, "_hf_hook"):
+                    getattr(module, key).data = getattr(module, key).data.to(
+                        original_device
+                    )

@@ -27,7 +27,7 @@ from llmcompressor.modifiers import Modifier
 from llmcompressor.typing import NamedModules
 from llmcompressor.utils import untie_word_embeddings
 from llmcompressor.utils.pytorch.module import get_module_name
-
+from loguru import logger
 from .mappings import SpinQuantMapping, infer_mapping_from_model
 from .norm_mappings import NormMapping, infer_norm_mapping_from_model
 
@@ -93,12 +93,13 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
         A mapping will be inferred if None is provided
     :param transform_config: Optional transform config for overriding provided arguments
     """
+
     do_fold: bool = Field(default=True)
     backe_mean: bool = Field(default=False)
     rotations: List[SpinquantRotation] = Field(default_factory=lambda: ["R1", "R2"])
-    transform_type: Literal["hadamard", "random-hadamard", "random-matrix", "identity"] = Field(
-        default="hadamard"
-    )
+    transform_type: Literal[
+        "hadamard", "random-hadamard", "random-matrix", "identity"
+    ] = Field(default="hadamard")
     randomize: bool = Field(default=False)
     learnable: bool = Field(default=False)
     precision: TorchDtype = Field(default=torch.float64)
@@ -177,7 +178,6 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
         if self.backe_mean:
             self._center_embeddings(model)
             self._bake_mean_into_fc(model)
-        self._center_embeddings(model)
         self._fuse_norms(model)
         apply_transform_config(model, self.transform_config)
 
@@ -220,7 +220,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
 
     def _center_embeddings(self, model: PreTrainedModel):
         for _, embedding in match_named_modules(
-            model, [self.mappings.embedding], warn_on_fail=True
+            model, self.mappings.embedding, warn_on_fail=True
         ):
             center_embeddings(embedding)
 
@@ -243,6 +243,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
 
     def _fuse_norms(self, model: PreTrainedModel):
         for mapping in self.norm_mappings:
+            name = None
             for norm, *linears in match_modules_set(
                 model, (mapping.norm, *mapping.linears)
             ):
@@ -253,6 +254,11 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
                 fuse_norm_linears(norm, linears_flatten)
                 name = get_module_name(model, norm)
                 replace_ln_to_rmsnorm(name, norm, model)
+            if name is None:
+                logger.warning(
+                    f"Could not find norm {mapping.norm} and linears "
+                    f"{mapping.linears} for fusing"
+                )
 
     def _create_r1_scheme(self) -> TransformScheme:
         return TransformScheme(
@@ -265,7 +271,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
             apply=[
                 TransformArgs(
                     targets=[
-                        self.mappings.embedding,
+                        *self.mappings.embedding,
                         *self.mappings.mm_proj,
                         self.mappings.attn_o,
                         *self.mappings.mlp_out,
@@ -324,11 +330,15 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
 
     def _create_r3_scheme(self, head_dim: int) -> TransformScheme:
         return TransformScheme(
+            sequential_onload=self.sequential_onload,
             type=self.transform_type,
+            block_wise=True,
             randomize=self.randomize,
             requires_grad=self.learnable,
             precision=self.precision,
-            head_dim=head_dim,
+            head_dim=self.transform_block_size_R4
+            if self.transform_block_size_R4
+            else head_dim,
             apply=[
                 TransformArgs(
                     targets=[self.mappings.attn],

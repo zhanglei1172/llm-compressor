@@ -136,6 +136,7 @@ def graphwise_error_analyse(
         desc="Analysing Graphwise Quantization Error(Phrase 1):",
         total=(min(len(dataloader), steps)),
     ):
+        batch = batch.to(model.device)
         model(batch)
 
         for name, operation in interested_op:
@@ -156,6 +157,7 @@ def graphwise_error_analyse(
         desc="Analysing Graphwise Quantization Error(Phrase 2):",
         total=(min(len(dataloader), steps)),
     ):
+        batch = batch.to(model.device)
         model(batch)
 
         for name, operation in interested_op:

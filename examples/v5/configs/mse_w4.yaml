@@ -1,0 +1,29 @@
+quant_stage:
+  quant_modifiers:
+    QuantizationModifier:
+      ignore: ["re:lm_head", "re:.*visual.*"]
+      config_groups:
+        group_0:
+          weights:
+            observer: mse
+            observer_kwargs:
+              maxshrink: 0.1
+              patience: 10
+              averaging_constant: 0.05
+              grid: 128.0
+              norm: 2.0
+            num_bits: 4
+            type: int
+            symmetric: true
+            strategy: channel
+          targets: [
+                        "re:.*up_proj$",
+                        "re:.*gate_proj$",
+                        "re:.*q_proj$",
+                        "re:.*k_proj$",
+                        "re:.*v_proj$",
+                        "re:.*o_proj$",
+                        "re:.*out_proj$",
+                        "re:.*attn.proj$",
+                        "re:.*down_proj$"
+                    ]

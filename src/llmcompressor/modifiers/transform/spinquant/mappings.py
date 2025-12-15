@@ -30,7 +30,7 @@ class SpinQuantMapping(BaseModel):
 
     mm_proj: List[str] = Field(default_factory=list)
 
-    embedding: str
+    embedding: List[str] = Field(default_factory=list)
 
     attn: str
     attn_q: str
@@ -44,7 +44,7 @@ class SpinQuantMapping(BaseModel):
 
     lm_head: List[str]
 
-    @field_validator("mlp_in", "mlp_out", "mm_proj", "lm_head", mode="before")
+    @field_validator("mlp_in", "mlp_out", "mm_proj", "lm_head", "embedding", mode="before")
     def cast_to_list(cls, value):
         if isinstance(value, str):
             return [value]
