@@ -2,7 +2,7 @@ quant_stage:
   quant_modifiers:
 
     AutoRoundModifier:
-      ignore: ["re:lm_head"]
+      ignore: ["re:lm_head", "re:.*visual.*"]
       iters: 200
       enable_torch_compile: false
 

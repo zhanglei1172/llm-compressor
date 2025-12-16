@@ -163,9 +163,9 @@ enable_modality = {
     # "vit",
     "text"
 }
+model_dtype = torch.bfloat16
 #################### configurations ####################
 
-model_dtype = torch.bfloat16
 
 MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen2.5-VL-7B-Instruct/"
 
@@ -370,8 +370,9 @@ def pre_compression_thinker_text(model):
             do_fold=False,
             backe_mean=False,
             learnable=True,
-            rotations=["R1", "R2"],
+            rotations=["R4"],
             transform_block_size_R1=3584,
+            transform_block_size_R4=128,
             transform_type="identity",
             sequential_onload=True,
         )
@@ -598,10 +599,10 @@ def regist_hook(model, stat_tensors):
                     functools.partial(stat_linear_input_hook, subm=subm)
                 )
             )
-        elif (
-            isinstance(m, TransformBase) and m.args.location == TransformLocation.INPUT
-        ):
-            hooks.append(m.register_forward_hook(stat_transform_input_hook))
+        # elif (
+        #     isinstance(m, TransformBase) and m.args.location == TransformLocation.INPUT
+        # ):
+        #     hooks.append(m.register_forward_hook(stat_transform_input_hook))
     return hooks
 
 
@@ -843,12 +844,12 @@ if __name__ == "__main__":
                 name=f"{module_name}.{param_name}",
                 transform_module=module,
                 train_datas=list(stat_tensors[id(param)].values()),
-                optim="sgd",
+                optim="adam",
                 lr=1.5e-3,
                 mom=0.9,
                 cos_lr=False,
                 ep=10,
-                bsz=64,
+                bsz=32,
                 accumulation_steps=2,
                 val_ratio=0.1,
             )
