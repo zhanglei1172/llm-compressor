@@ -108,9 +108,21 @@ class MyTrainer(Trainer):
         if loss_type == "mse":
             labels = inputs.pop("labels", None)
             ori_logits = self.get_ori_outputs(model, inputs)
+            if not isinstance(ori_logits, tuple):
+                ori_logits = (ori_logits,)
             outputs = model(**inputs)
+            if not isinstance(outputs, tuple):
+                outputs = (outputs,)
             logits = outputs
-            loss = F.mse_loss(logits, ori_logits)
+            loss = 0
+            for logit, ori_logit in zip(logits, ori_logits):
+                logit, ori_logit = logit.float(), ori_logit.float()
+                scale = ori_logit.detach().pow(2).mean().sqrt().clamp(min=1e-3)
+                mse = F.mse_loss(
+                    logit,
+                    ori_logit,
+                )
+                loss = loss + (mse / scale)
             return loss
 
         if loss_type == "rkl":

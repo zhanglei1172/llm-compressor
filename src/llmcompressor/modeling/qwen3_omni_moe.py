@@ -168,8 +168,9 @@ class ReformQwen3OmniMoeVisionAttention(nn.Module):
 
 def replace_vit_attention(module: torch.nn.Module):
     for name, child in module.named_children():
-        if isinstance(child, Qwen3OmniMoeVisionAttention):
+        if type(child).__name__ in ("Qwen3OmniMoeVisionAttention", "Qwen3_VLVisionSdpaAttention"):
             replaced = ReformQwen3OmniMoeVisionAttention(child)
+            replaced._orig_mod_name = type(child).__name__
             setattr(module, name, replaced)
         else:
             replace_vit_attention(child)
