@@ -183,8 +183,8 @@ flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
 enable_modality = {
     # "vit",
-    # "aut",
-    "text"
+    "aut",
+    # "text"
 }
 model_dtype = torch.bfloat16
 #################### configurations ####################
@@ -194,7 +194,7 @@ if pretrain == "ostq":
     MODEL_ID = "/code/omni_ostq_wa_bf16/transformed_model/"
 else:
     # MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-Thinking/"
-    MODEL_ID = "/tmp/Qwen3-Omni-Thinking-origin-spinquant(vit,)-trans"
+    MODEL_ID = "/tmp/Qwen3-Omni-Thinking-origin-spinquant(vit,)-trans-origin-spinquant(text,)-trans"
 
 flag += str(tuple(enable_modality)).replace("'", "")
 
@@ -952,20 +952,17 @@ def fsdp_main(model, config):
     )
     trainer.train()
     dist.barrier()
-    save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-    with PT_FSDP.state_dict_type(
-        model_to_train, StateDictType.FULL_STATE_DICT, save_policy
-    ):
-        if hasattr(trainer.model, "_orig_mod"):
-            state_dict = trainer.model._orig_mod.state_dict()
-        else:
-            state_dict = trainer.model.state_dict()
-        if not RANK_OTHER:
-            state_dict = {
-                k: v for k, v in state_dict.items() if not k.startswith("teacher")
-            }
-            model.thinker.load_state_dict(state_dict, assign=True)
-            trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
+    if hasattr(trainer.model, "_orig_mod"):
+        unwrapped_model = trainer.model._orig_mod
+    else:
+        unwrapped_model = trainer.model
+    state_dict = trainer.accelerator.get_state_dict(unwrapped_model)
+    if not RANK_OTHER:
+        state_dict = {
+            k: v for k, v in state_dict.items() if not k.startswith("teacher")
+        }
+        model.thinker.load_state_dict(state_dict, assign=True)
+        trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
 
 
 @torch.no_grad()

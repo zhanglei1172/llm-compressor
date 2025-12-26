@@ -16,7 +16,7 @@ quant_stage:
               averaging_constant: 0.05
               grid: 128.0
               norm: 2.0
-            num_bits: 8
+            num_bits: 4
             type: int
             symmetric: true
             strategy: channel

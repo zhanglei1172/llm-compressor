@@ -1,7 +1,7 @@
 quant_stage:
   quant_modifiers:
     QuantizationModifier:
-      ignore: ["re:lm_head", "re:.*visual.*"]
+      ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:audio_tower.*"]
       config_groups:
         group_0:
           weights:
@@ -26,12 +26,14 @@ quant_stage:
           targets: [
                         "re:.*up_proj$",
                         "re:.*gate_proj$",
+                        "re:.*gate$",
                         "re:.*q_proj$",
                         "re:.*k_proj$",
                         "re:.*v_proj$",
                         "re:.*o_proj$",
                         "re:.*out_proj$",
                         "re:.*attn.proj$",
+                        # "re:.*down_proj$",
                     ]
         group_1:
           weights:

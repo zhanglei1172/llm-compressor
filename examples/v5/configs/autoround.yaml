@@ -15,4 +15,14 @@ quant_stage:
             strategy: channel
           input_activations:
           output_activations:
-          targets: [Linear]
+          targets: [
+                        "re:.*up_proj$",
+                        "re:.*gate_proj$",
+                        "re:.*q_proj$",
+                        "re:.*k_proj$",
+                        "re:.*v_proj$",
+                        "re:.*o_proj$",
+                        "re:.*out_proj$",
+                        "re:.*attn.proj$",
+                        "re:.*down_proj$"
+                    ]

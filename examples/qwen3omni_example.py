@@ -72,16 +72,94 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
 #################### configurations ####################
 # Select model and load it.
 pretrain = "ostq"
-recipe = "examples/qwen3_omni_configs/text/mse_w8a8.yaml"
-flag = "mse_w8a8"
+# recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
+recipe = "examples/qwen3_omni_configs/text/mse_w4a8.yaml"
+# flag = "gptq-moeall"
+flag = "mse_w4a8"
 fq = False
 realq = True
 NUM_CALIBRATION_SAMPLES = 256
+from llmcompressor.modeling.moe_context import MoECalibrationModule
+@MoECalibrationModule.register("Qwen3OmniMoeThinkerTextSparseMoeBlock")
+class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
+    """
+    Calibration version of Qwen3MoeSparseMoeBlock that sends all tokens to all experts.
+    """
+
+    is_permanent = False
+
+    def __init__(
+        self,
+        original,
+        config,
+        calibrate_all_experts: bool = True,
+    ):
+        super().__init__()
+        self.num_experts = config.num_experts
+        self.top_k = config.num_experts_per_tok
+        self.norm_topk_prob = config.norm_topk_prob
+
+        self.calibrate_all_experts = calibrate_all_experts
+        self.gate = original.gate
+        self.experts = original.experts
+
+    def forward(self, hidden_states: torch.Tensor):
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        # router_logits: (batch * sequence_length, n_experts)
+        router_logits = self.gate(hidden_states)
+
+        routing_weights = torch.nn.functional.softmax(
+            router_logits, dim=1, dtype=torch.float
+        )
+        routing_weights, selected_experts = torch.topk(
+            routing_weights, self.top_k, dim=-1
+        )
+        if self.norm_topk_prob:  # only diff with mixtral sparse moe block!
+            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        # we cast back to the input dtype
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim),
+            dtype=hidden_states.dtype,
+            device=hidden_states.device,
+        )
+
+        # One hot encode the selected experts to create an expert mask
+        # this will be used to easily index which expert is going to be sollicitated
+        expert_mask = torch.nn.functional.one_hot(
+            selected_experts, num_classes=self.num_experts
+        ).permute(2, 1, 0)
+
+        for expert_idx, expert_layer in enumerate(self.experts):
+            idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+
+            if self.calibrate_all_experts:
+                expert_out = expert_layer(hidden_states)[top_x]
+            else:
+                expert_out = expert_layer(hidden_states[top_x])
+
+            # TODO: double check
+            if len(top_x) > 0:
+                current_hidden_states = expert_out * routing_weights[top_x, idx, None]
+                final_hidden_states.index_add_(
+                    0, top_x, current_hidden_states.to(hidden_states.dtype)
+                )
+
+        final_hidden_states = final_hidden_states.reshape(
+            batch_size, sequence_length, hidden_dim
+        )
+        return final_hidden_states
+
+    def restore(self, original: torch.nn.Module) -> torch.nn.Module:
+        return original
+
 #################### configurations ####################
 
 
 if pretrain == "ostq":
-    MODEL_ID = "/code/omni_ostq_wa_bf16/transformed_model/"
+    MODEL_ID = "/tmp/Qwen2.5-VL-7B-Instruct-origin-ostquant(text|)-trans-gptq-fq-autoround-fq"
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 

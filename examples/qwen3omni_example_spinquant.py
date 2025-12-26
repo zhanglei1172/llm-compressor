@@ -485,14 +485,14 @@ def fsdp_main(model, config):
     )
     trainer.train()
     dist.barrier()
-    save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-    with PT_FSDP.state_dict_type(
-        model_to_train, StateDictType.FULL_STATE_DICT, save_policy
-    ):
-        state_dict = trainer.model.state_dict()
-        if not RANK_OTHER:
-            model.thinker.load_state_dict(state_dict, assign=True)
-            trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
+    if hasattr(trainer.model, "_orig_mod"):
+        unwrapped_model = trainer.model._orig_mod
+    else:
+        unwrapped_model = trainer.model
+    state_dict = trainer.accelerator.get_state_dict(unwrapped_model)
+    if not RANK_OTHER:
+        model.thinker.load_state_dict(state_dict, assign=True)
+        trainer.register_tied_parameters(model.thinker, weight_tied_name_map)
 
 
 @torch.no_grad()
