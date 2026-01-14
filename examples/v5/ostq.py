@@ -166,7 +166,7 @@ enable_modality = {
 
 model_dtype = torch.bfloat16
 
-MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen2.5-VL-7B-Instruct/"
+MODEL_ID = "/dataset/620/v1/models/qwenvl_2.5/v3-20260108-131155/checkpoint-30600/"
 
 
 flag += str(tuple(enable_modality)).replace("'", "").replace(",", "|")
@@ -490,7 +490,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
         ]
         # conversations = [example["messages"] for example in examples]
         text = self.processor.apply_chat_template(
-            conversations, add_generation_prompt=True, tokenize=False
+            conversations, add_generation_prompt=False, tokenize=False
         )
         audios, images, videos = process_mm_info(
             conversations, use_audio_in_video=USE_AUDIO_IN_VIDEO

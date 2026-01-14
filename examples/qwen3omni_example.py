@@ -72,12 +72,12 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
 #################### configurations ####################
 # Select model and load it.
 pretrain = "ostq"
-# recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
-recipe = "examples/qwen3_omni_configs/text/mse_w4a8.yaml"
-# flag = "gptq-moeall"
-flag = "mse_w4a8"
-fq = False
-realq = True
+recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
+# recipe = "examples/qwen3_omni_configs/text/mse_w4a8.yaml"
+flag = "gptq-moeall"
+# flag = "mse_w4a8"
+fq = True #False
+realq = False
 NUM_CALIBRATION_SAMPLES = 256
 from llmcompressor.modeling.moe_context import MoECalibrationModule
 @MoECalibrationModule.register("Qwen3OmniMoeThinkerTextSparseMoeBlock")
@@ -159,7 +159,7 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
 
 
 if pretrain == "ostq":
-    MODEL_ID = "/tmp/Qwen2.5-VL-7B-Instruct-origin-ostquant(text|)-trans-gptq-fq-autoround-fq"
+    MODEL_ID = '/dataset/workspace/zhangl98/qwenomni-exp/Qwen3-Omni-Thinking-origin-spinquant(vit)-trans-origin-spinquant(text)-trans-origin-spinquant(aut)-trans/'
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 

@@ -84,7 +84,7 @@ model_dtype = torch.bfloat16
 
 
 MODEL_ID = (
-    "/tmp/Qwen2.5-VL-7B-Instruct-quarot-trans"
+    "/tmp/Qwen2.5-VL-7B-Instruct-origin-ostquant(text|)-trans"
 )
 
 MAX_SEQUENCE_LENGTH = 2048
@@ -404,7 +404,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
         ]
         # conversations = [example["messages"] for example in examples]
         text = self.processor.apply_chat_template(
-            conversations, add_generation_prompt=True, tokenize=False
+            conversations, add_generation_prompt=False, tokenize=False
         )
         audios, images, videos = process_mm_info(
             conversations, use_audio_in_video=USE_AUDIO_IN_VIDEO
@@ -548,7 +548,7 @@ if __name__ == "__main__":
         results = graphwise_error_analyse(
             model,  # TODO
             dataloader,
-            method="sqnr",
+            method="cosine",
             steps=8,
             verbose=True,
         )

@@ -747,7 +747,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
         ]
         # conversations = [example["messages"] for example in examples]
         text = self.processor.apply_chat_template(
-            conversations, add_generation_prompt=True, tokenize=False
+            conversations, add_generation_prompt=False, tokenize=False
         )
         audios, images, videos = process_mm_info(
             conversations, use_audio_in_video=USE_AUDIO_IN_VIDEO

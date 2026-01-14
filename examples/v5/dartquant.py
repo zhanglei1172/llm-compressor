@@ -167,7 +167,7 @@ model_dtype = torch.bfloat16
 #################### configurations ####################
 
 
-MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen2.5-VL-7B-Instruct/"
+MODEL_ID = "/dataset/workspace/zhangl98/v5-1010/w4a8/ostq_noSele_vit_merge/"
 
 
 flag += str(tuple(enable_modality)).replace("'", "").replace(",", "|")
@@ -415,7 +415,7 @@ class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
         ]
         # conversations = [example["messages"] for example in examples]
         text = self.processor.apply_chat_template(
-            conversations, add_generation_prompt=True, tokenize=False
+            conversations, add_generation_prompt=False, tokenize=False
         )
         audios, images, videos = process_mm_info(
             conversations, use_audio_in_video=USE_AUDIO_IN_VIDEO
