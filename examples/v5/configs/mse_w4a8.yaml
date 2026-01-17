@@ -17,6 +17,13 @@ quant_stage:
             symmetric: true
             strategy: channel
           input_activations:
+            observer: mse
+            observer_kwargs:
+              maxshrink: 0.1
+              patience: 10
+              averaging_constant: 0.05
+              grid: 128.0
+              norm: 2.0
             num_bits: 8
             type: int
             symmetric: True
@@ -34,6 +41,19 @@ quant_stage:
                         "re:.*attn.proj$",
                     ]
         group_1:
+          input_activations:
+            observer: mse
+            observer_kwargs:
+              maxshrink: 0.1
+              patience: 10
+              averaging_constant: 0.05
+              grid: 128.0
+              norm: 2.0
+            num_bits: 8
+            type: int
+            symmetric: True
+            strategy: tensor
+            dynamic: false
           weights:
             observer: mse
             observer_kwargs:

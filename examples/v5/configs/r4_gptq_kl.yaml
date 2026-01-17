@@ -1,0 +1,52 @@
+quant_stage:
+  quant_modifiers:
+    SpinQuantModifier:
+      backe_mean: False
+      rotations: ["R4"]
+      transform_block_size_R4: 256
+      learnable: True
+      transform_type: "hadamard"
+    # SmoothQuantModifier:
+    #   smoothing_strength: 0.8
+    GPTQModifier:
+      # ignore: ["re:lm_head", "re:visual.*", "re:model.visual.*", "re:conv.*", 're:proj[\d].*', "re:positional_embedding*"]
+      ignore: ["re:lm_head", "re:.*visual.*"]
+      actorder: null
+      config_groups:
+        group_0:
+          input_activations:
+            observer: kl
+            observer_kwargs:
+              maxshrink: 0.1
+              averaging_constant: 0.05
+              grid: 128.0
+              num_bins: 2048
+              num_quantized_bins: 128
+            num_bits: 8
+            type: int
+            symmetric: True
+            strategy: tensor
+            dynamic: false
+          weights:
+            observer: mse
+            observer_kwargs:
+              maxshrink: 0.1
+              patience: 10
+              averaging_constant: 0.05
+              grid: 128.0
+              norm: 2.0
+            num_bits: 4
+            type: int
+            symmetric: true
+            strategy: channel
+          targets: [
+                        "re:.*up_proj$",
+                        "re:.*gate_proj$",
+                        "re:.*q_proj$",
+                        "re:.*k_proj$",
+                        "re:.*v_proj$",
+                        "re:.*o_proj$",
+                        "re:.*out_proj$",
+                        "re:.*attn.proj$",
+                        "re:.*down_proj$"
+                    ]
