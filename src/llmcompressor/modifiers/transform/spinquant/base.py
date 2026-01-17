@@ -95,6 +95,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
     """
 
     do_fold: bool = Field(default=True)
+    skip_weights_folding: bool = Field(default=False, repr=False)
     backe_mean: bool = Field(default=False)
     rotations: List[SpinquantRotation] = Field(default_factory=lambda: ["R1", "R2"])
     transform_type: Literal[
@@ -205,7 +206,7 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
         return True
 
     def _fold_transforms_into_weights(self, model: PreTrainedModel):
-        replace_parametrizations_to_weights(model)
+        replace_parametrizations_to_weights(model, self.skip_weights_folding)
 
     def _get_targets(self, model: torch.nn.Module) -> NamedModules:
         if not self.initialized_:

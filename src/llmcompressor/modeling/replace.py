@@ -63,7 +63,9 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
 
 
 @torch.no_grad()
-def replace_parametrizations_to_weights(model: torch.nn.Module):
+def replace_parametrizations_to_weights(
+    model: torch.nn.Module, skip_weights_folding=False
+):
     """
     Fold the parametrizations into the weight of the module.
 
@@ -80,7 +82,9 @@ def replace_parametrizations_to_weights(model: torch.nn.Module):
                     ].original.data = module.parametrizations[key].original.data.to(
                         device="cuda"
                     )
-                remove_parametrizations(module, key)
+                remove_parametrizations(
+                    module, key, leave_parametrized=not skip_weights_folding
+                )
                 if not hasattr(module, "_hf_hook"):
                     getattr(module, key).data = getattr(module, key).data.to(
                         original_device
