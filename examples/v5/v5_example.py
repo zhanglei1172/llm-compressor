@@ -22,12 +22,14 @@ from llmcompressor.utils import dispatch_for_generation
 
 #################### configurations ####################
 # Select model and load it.
-MODEL_ID = "/tmp/Qwen2.5-VL-7B-Instruct-quarot-trans"
+MODEL_ID = '/dataset/workspace/lim42/models/620v1_256r4_gptq_w4_fakequant_v2/'
+MODEL_ID = '/tmp/ostq-gptq-lrqat_klt-my-/'
+# MODEL_ID = '/dataset/workspace/zhangl98/v620-0112/w4a8/checkpoint-30600-origin-ostquant(text|)-trans/'
 
-recipe = "examples/v5/configs/quarot.yaml"
+recipe = "examples/v5/configs/r4_mse_w4a8.yaml"
 fq = False  # True
-realq = False
-flag = "quarot"
+realq = True
+flag = "r4_mse_w4a8"
 model_dtype = torch.bfloat16
 # MODEL_ID = "/dataset/workspace/zhangl98/v5-1010/w4a8/ostq_noSele/transformed_model"
 #################### configurations ####################
@@ -122,6 +124,7 @@ if flag == "quarot":
 MAX_SEQUENCE_LENGTH = 2048
 
 ds = get_dataset(
+    dataset_name="HuggingFaceH4/ultrachat_200k",
     tokenizer=tokenizer,
     seqlen=MAX_SEQUENCE_LENGTH,
     nsamples=NUM_CALIBRATION_SAMPLES,
