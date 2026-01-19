@@ -9,6 +9,7 @@ from compressed_tensors.quantization import (
     forward_quantize,
 )
 from compressed_tensors.transform.factory.base import TransformBase
+from datasets import load_dataset, load_from_disk
 from transformers import AutoProcessor, AutoTokenizer
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration,
@@ -22,14 +23,14 @@ from llmcompressor.utils import dispatch_for_generation
 
 #################### configurations ####################
 # Select model and load it.
-MODEL_ID = '/dataset/workspace/lim42/models/620v1_256r4_gptq_w4_fakequant_v2/'
-MODEL_ID = '/tmp/ostq-gptq-lrqat_klt-my-/'
+MODEL_ID = '/dataset/workspace/zhangl98/v620-0112/w4a8/ostq-gptq-lrqat_klt'
+# MODEL_ID = '/tmp/ostq-gptq-lrqat_klt-my-/'
 # MODEL_ID = '/dataset/workspace/zhangl98/v620-0112/w4a8/checkpoint-30600-origin-ostquant(text|)-trans/'
 
 recipe = "examples/v5/configs/r4_mse_w4a8.yaml"
 fq = False  # True
 realq = True
-flag = "r4_mse_w4a8"
+flag = ".r4_mse_w4a8-pc-999"
 model_dtype = torch.bfloat16
 # MODEL_ID = "/dataset/workspace/zhangl98/v5-1010/w4a8/ostq_noSele/transformed_model"
 #################### configurations ####################
@@ -117,18 +118,51 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 
 # Select number of samples. 256 samples is a good place to start.
 # Increasing the number of samples can improve accuracy.
-NUM_CALIBRATION_SAMPLES = 128
+NUM_CALIBRATION_SAMPLES = 256
 if flag == "quarot":
     NUM_CALIBRATION_SAMPLES = 1
 
 MAX_SEQUENCE_LENGTH = 2048
 
-ds = get_dataset(
-    dataset_name="HuggingFaceH4/ultrachat_200k",
-    tokenizer=tokenizer,
-    seqlen=MAX_SEQUENCE_LENGTH,
-    nsamples=NUM_CALIBRATION_SAMPLES,
-)
+def get_custom_data(data_path, DATASET_SPLIT='train'):
+    ds = load_dataset("json", data_files=data_path, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
+    ds = ds.shuffle(seed=42)
+
+
+    def preprocess(example):
+        return {
+            "text": tokenizer.apply_chat_template(
+                example["messages"],
+                tokenize=False,
+            )
+        }
+
+
+    ds = ds.map(preprocess)
+
+
+    # Tokenize inputs.
+    def tokenize(sample):
+        return tokenizer(
+            sample["text"],
+            padding=False,
+            max_length=MAX_SEQUENCE_LENGTH,
+            truncation=True,
+            # add_special_tokens=False,
+        )
+
+
+    ds = ds.map(tokenize, remove_columns=ds.column_names)
+    return ds
+
+# ds = get_dataset(
+#     dataset_name="HuggingFaceH4/ultrachat_200k",
+#     tokenizer=tokenizer,
+#     seqlen=MAX_SEQUENCE_LENGTH,
+#     nsamples=NUM_CALIBRATION_SAMPLES,
+# )
+
+ds = get_custom_data("/workspace/zhangl98@xiaopeng.com/code/xmart-quantization-evaluation/debug/gen_msg_datas_decision.json", "train")
 
 # config_groups = {
 #     "group_0": {
