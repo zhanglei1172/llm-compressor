@@ -7,7 +7,6 @@ from transformers.modeling_outputs import BaseModelOutput
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     ALL_ATTENTION_FUNCTIONS,
     Qwen3OmniMoeVisionAttention,
-    SinusoidsPositionEmbedding,
     _get_feat_extract_output_lengths,
     apply_rotary_pos_emb_vision,
     eager_attention_forward,
@@ -168,7 +167,10 @@ class ReformQwen3OmniMoeVisionAttention(nn.Module):
 
 def replace_vit_attention(module: torch.nn.Module):
     for name, child in module.named_children():
-        if type(child).__name__ in ("Qwen3OmniMoeVisionAttention", "Qwen3_VLVisionSdpaAttention"):
+        if type(child).__name__ in (
+            "Qwen3OmniMoeVisionAttention",
+            "Qwen3_VLVisionSdpaAttention",
+        ):
             replaced = ReformQwen3OmniMoeVisionAttention(child)
             replaced._orig_mod_name = type(child).__name__
             setattr(module, name, replaced)
@@ -322,6 +324,7 @@ def replace_audio_embedding(module: torch.nn.Module):
         else:
             replace_audio_embedding(child)
 
+
 def replace_rmsnorm(module: torch.nn.Module):
     for name, child in module.named_children():
         if isinstance(child, torch.nn.LayerNorm):
@@ -334,6 +337,7 @@ def replace_rmsnorm(module: torch.nn.Module):
             setattr(module, name, replaced)
         else:
             replace_rmsnorm(child)
+
 
 def replace():
     return moe_forward

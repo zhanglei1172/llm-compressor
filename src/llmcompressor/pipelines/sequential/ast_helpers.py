@@ -4,8 +4,8 @@ import inspect
 import linecache
 import sys
 import textwrap
-from typing import List, Any
 import traceback
+from typing import Any, List
 
 import torch
 from compressed_tensors.utils import patch_attr

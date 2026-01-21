@@ -7,7 +7,7 @@ import copy
 import difflib
 import re
 from operator import attrgetter
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 from compressed_tensors import InternalModule
@@ -627,6 +627,8 @@ def build_weight_tied_map_with_unionfind(model: torch.nn.Module):
         canonical_name_map[name] = uf.find(name)
 
     return canonical_name_map
+
+
 def get_module_to_name_dict(model: Module) -> dict[Module, str]:
     module_to_name = {}
     for name, module in model.named_modules():

@@ -1,29 +1,20 @@
 import contextlib
 import copy
-from typing import Mapping, Optional, Union
-from unittest.mock import patch
 
 import torch
-from accelerate.hooks import attach_align_device_hook, remove_hook_from_module
+from accelerate.hooks import remove_hook_from_module
 from compressed_tensors import get_execution_device
 from compressed_tensors.quantization import (
-    QuantizationArgs,
-    QuantizationScheme,
-    QuantizationStrategy,
-    QuantizationType,
     forward_quantize,
 )
-from datasets import load_dataset, load_from_disk
+from datasets import load_dataset
 from qwen_omni_utils import process_mm_info
-from qwen_vl_utils import process_vision_info
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
 )
 
 from llmcompressor import oneshot
-from llmcompressor.modifiers.awq import AWQModifier
-from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
 from llmcompressor.utils import dispatch_for_generation, helpers
@@ -76,10 +67,12 @@ recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
 # recipe = "examples/qwen3_omni_configs/text/mse_w4a8.yaml"
 flag = "gptq-moeall"
 # flag = "mse_w4a8"
-fq = True #False
+fq = True  # False
 realq = False
 NUM_CALIBRATION_SAMPLES = 256
 from llmcompressor.modeling.moe_context import MoECalibrationModule
+
+
 @MoECalibrationModule.register("Qwen3OmniMoeThinkerTextSparseMoeBlock")
 class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
     """
@@ -155,14 +148,14 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
     def restore(self, original: torch.nn.Module) -> torch.nn.Module:
         return original
 
+
 #################### configurations ####################
 
 
 if pretrain == "ostq":
-    MODEL_ID = '/dataset/workspace/zhangl98/qwenomni-exp/Qwen3-Omni-Thinking-origin-spinquant(vit)-trans-origin-spinquant(text)-trans-origin-spinquant(aut)-trans/'
+    MODEL_ID = "/dataset/workspace/zhangl98/qwenomni-exp/Qwen3-Omni-Thinking-origin-spinquant(vit)-trans-origin-spinquant(text)-trans-origin-spinquant(aut)-trans/"
 else:
     MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
-
 
 
 # Select calibration dataset.
@@ -387,7 +380,6 @@ print("==========================================\n\n")
 # SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-awq-sym2"
 from compressed_tensors.quantization import QuantizationStatus
 from compressed_tensors.utils.match import match_named_modules
-from tqdm import tqdm
 
 # for prefix, module in tqdm(
 #     match_named_modules(

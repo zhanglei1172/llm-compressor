@@ -3,21 +3,14 @@ import copy
 
 import torch
 from accelerate.hooks import remove_hook_from_module
-from compressed_tensors import get_execution_device
 from compressed_tensors.quantization import (
-    QuantizationArgs,
-    QuantizationScheme,
-    QuantizationStrategy,
-    QuantizationType,
     forward_quantize,
 )
 from datasets import load_dataset
 from qwen_omni_utils import process_mm_info
-from qwen_vl_utils import process_vision_info
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
-    _get_feat_extract_output_lengths,
 )
 
 from llmcompressor import oneshot
@@ -26,7 +19,6 @@ from llmcompressor.modeling.qwen3_omni_moe import (
     replace_vit_attention,
     replace_vit_attention_inv,
 )
-from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
 from llmcompressor.transformers.compression.compressed_tensors_utils import (
@@ -206,7 +198,6 @@ with contextlib.ExitStack() as stack:
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
         num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        
         sequential_targets=["Qwen3OmniMoeVisionBlock"],
         # pipeline="basic",
     )
@@ -271,16 +262,12 @@ print("==========================================\n\n")
 # SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-awq-sym2"
 from compressed_tensors.quantization import QuantizationStatus
 from compressed_tensors.utils.match import match_named_modules
-from tqdm import tqdm
 
 SAVE_DIR = (
     "/tmp/"
     + MODEL_ID.rstrip("/").split("/")[-1]
     + f"-{flag}-sym-com-vit"
     + ("-realq" if realq else ("-fq" if fq else "-trans"))
-)
-from llmcompressor.transformers.compression.compressed_tensors_utils import (
-    modify_save_pretrained,
 )
 
 if realq:

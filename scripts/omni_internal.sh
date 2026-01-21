@@ -1,5 +1,11 @@
-# ptq
+# text ptq
 CUDA_VISIBLE_DEVICES=2 HF_ENDPOINT=https://alpha.hf-mirror.com HF_DATASETS_CACHE=/dataset/workspace/zhangl98/hf_cache/ ./.venv/bin/python ./examples/qwen3omni_example.py
+
+# vit ptq
+CUDA_VISIBLE_DEVICES=2 HF_ENDPOINT=https://alpha.hf-mirror.com HF_DATASETS_CACHE=/dataset/workspace/zhangl98/hf_cache/ ./.venv/bin/python ./examples/qwen3omni_vit_example.py
+
+# audio ptq
+CUDA_VISIBLE_DEVICES=2 HF_ENDPOINT=https://alpha.hf-mirror.com HF_DATASETS_CACHE=/dataset/workspace/zhangl98/hf_cache/ ./.venv/bin/python ./examples/qwen3omni_audio_example.py
 
 
 # enable_modality 选择多模态

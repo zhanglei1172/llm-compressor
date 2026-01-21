@@ -44,7 +44,9 @@ class SpinQuantMapping(BaseModel):
 
     lm_head: List[str]
 
-    @field_validator("mlp_in", "mlp_out", "mm_proj", "lm_head", "embedding", mode="before")
+    @field_validator(
+        "mlp_in", "mlp_out", "mm_proj", "lm_head", "embedding", mode="before"
+    )
     def cast_to_list(cls, value):
         if isinstance(value, str):
             return [value]

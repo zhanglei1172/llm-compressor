@@ -10,6 +10,7 @@ from compressed_tensors.transform import (
     apply_transform_config,
 )
 from compressed_tensors.utils import TorchDtype, get_head_dim
+from loguru import logger
 from pydantic import Field, ValidationInfo, field_validator
 from torch.utils._pytree import tree_leaves
 from transformers import PreTrainedModel
@@ -28,7 +29,7 @@ from llmcompressor.modifiers import Modifier
 from llmcompressor.typing import NamedModules
 from llmcompressor.utils import untie_word_embeddings
 from llmcompressor.utils.pytorch.module import get_module_name
-from loguru import logger
+
 from .mappings import SpinQuantMapping, infer_mapping_from_model
 from .norm_mappings import NormMapping, infer_norm_mapping_from_model
 

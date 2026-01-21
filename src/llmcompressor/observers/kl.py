@@ -56,7 +56,9 @@ def _compute_histogram_gpu(
 
         # Count occurrences in each bin
         hist = torch.zeros(num_bins, device=device, dtype=tensor.dtype)
-        hist.scatter_add_(0, indices.long(), torch.ones_like(indices, dtype=tensor.dtype))
+        hist.scatter_add_(
+            0, indices.long(), torch.ones_like(indices, dtype=tensor.dtype)
+        )
 
         return hist
 
@@ -273,7 +275,9 @@ def _grid_search_kl(
         q_max = q_flat.max().item()
 
         # Use GPU-accelerated histogram computation
-        hist_quantized = _compute_histogram_gpu(q_flat, num_quantized_bins, q_min, q_max)
+        hist_quantized = _compute_histogram_gpu(
+            q_flat, num_quantized_bins, q_min, q_max
+        )
 
         # Normalize to get probability distribution
         Q = hist_quantized.float() + 1e-10

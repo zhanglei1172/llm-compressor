@@ -9,15 +9,10 @@ import torch
 from accelerate.hooks import remove_hook_from_module
 from compressed_tensors import get_execution_device
 from compressed_tensors.quantization import (
-    QuantizationArgs,
-    QuantizationScheme,
-    QuantizationStrategy,
-    QuantizationType,
     forward_quantize,
 )
 from datasets import load_dataset
 from qwen_omni_utils import process_mm_info
-from qwen_vl_utils import process_vision_info
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["PYTHONPATH"] = os.path.dirname(os.path.abspath(__file__))
@@ -28,11 +23,9 @@ from qwen3_omni_moe_utils.processing_qwen3_omni_moe import Qwen3OmniMoeProcessor
 
 from llmcompressor import oneshot
 from llmcompressor.modeling.qwen3_omni_moe import (
-    get_audio_wrap_functions,
     replace_audio_embedding,
     replace_rmsnorm,
 )
-from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
 from llmcompressor.transformers.compression.compressed_tensors_utils import (
@@ -94,9 +87,9 @@ ori_shape = tensor.shape
 model_device = tensor.device
 transform_state_dict = OrderedDict()
 transform_state_dict = torch.load(f"{MODEL_ID}/transform_state_dict.pt")
-Q1 = transform_state_dict[
-    "audio_tower.positional_embedding.R1_weight_output"
-]["weight"].to(dtype=torch.float64, device=model_device)
+Q1 = transform_state_dict["audio_tower.positional_embedding.R1_weight_output"][
+    "weight"
+].to(dtype=torch.float64, device=model_device)
 model.thinker.audio_tower.positional_embedding.weight.data = (
     (
         (tensor - tensor.mean(-1, keepdim=True))
@@ -234,8 +227,6 @@ def data_collator(batch):
 # ]
 
 
-import sys
-
 # audio_wrap_funcs = get_audio_wrap_functions()
 
 # sys.modules[model.thinker.audio_tower.__class__.__module__].__dict__.update(
@@ -305,7 +296,6 @@ with contextlib.ExitStack() as stack:
         data_collator=data_collator,
         max_seq_length=MAX_SEQUENCE_LENGTH,
         num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        
         sequential_targets=["Qwen3OmniMoeAudioEncoderLayer"],
     )
 
@@ -375,7 +365,6 @@ print("==========================================\n\n")
 # SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-awq-sym2"
 from compressed_tensors.quantization import QuantizationStatus
 from compressed_tensors.utils.match import match_named_modules
-from tqdm import tqdm
 
 # for prefix, module in tqdm(
 #     match_named_modules(
@@ -404,9 +393,6 @@ SAVE_DIR = (
     + MODEL_ID.rstrip("/").split("/")[-1]
     + f"-{flag}-sym-com-audio"
     + ("-realq" if realq else ("-fq" if fq else "-trans"))
-)
-from llmcompressor.transformers.compression.compressed_tensors_utils import (
-    modify_save_pretrained,
 )
 
 if realq:

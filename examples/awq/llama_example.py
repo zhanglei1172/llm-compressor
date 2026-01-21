@@ -3,7 +3,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llmcompressor import oneshot
 from llmcompressor.modifiers.awq import AWQModifier
-from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.utils import dispatch_for_generation
 
 # Select model and load it.
@@ -48,6 +47,7 @@ def tokenize(sample):
         add_special_tokens=False,
     )
 
+
 config_groups = {
     "group_0": {
         "targets": ["Linear"],
@@ -59,7 +59,7 @@ config_groups = {
             "strategy": "channel",
             "dynamic": False,
             "symmetric": False,
-        }
+        },
     }
 }
 

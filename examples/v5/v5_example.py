@@ -1,29 +1,21 @@
 import torch
-from auto_round.calib_dataset import get_dataset
 from compressed_tensors.quantization import (
-    QuantizationArgs,
-    QuantizationScheme,
     QuantizationStatus,
-    QuantizationStrategy,
-    QuantizationType,
     forward_quantize,
 )
 from compressed_tensors.transform.factory.base import TransformBase
-from datasets import load_dataset, load_from_disk
+from datasets import load_dataset
 from transformers import AutoProcessor, AutoTokenizer
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration,
 )
 
 from llmcompressor import oneshot
-from llmcompressor.modifiers.autoround import AutoRoundModifier
-from llmcompressor.modifiers.transform import SpinQuantModifier
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
-from llmcompressor.utils import dispatch_for_generation
 
 #################### configurations ####################
 # Select model and load it.
-MODEL_ID = '/dataset/workspace/zhangl98/v620-0112/w4a8/ostq-gptq-lrqat_klt'
+MODEL_ID = "/dataset/workspace/zhangl98/v620-0112/w4a8/ostq-gptq-lrqat_klt"
 # MODEL_ID = '/tmp/ostq-gptq-lrqat_klt-my-/'
 # MODEL_ID = '/dataset/workspace/zhangl98/v620-0112/w4a8/checkpoint-30600-origin-ostquant(text|)-trans/'
 
@@ -124,10 +116,14 @@ if flag == "quarot":
 
 MAX_SEQUENCE_LENGTH = 2048
 
-def get_custom_data(data_path, DATASET_SPLIT='train'):
-    ds = load_dataset("json", data_files=data_path, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]")
-    ds = ds.shuffle(seed=42)
 
+def get_custom_data(data_path, DATASET_SPLIT="train"):
+    ds = load_dataset(
+        "json",
+        data_files=data_path,
+        split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}]",
+    )
+    ds = ds.shuffle(seed=42)
 
     def preprocess(example):
         return {
@@ -137,9 +133,7 @@ def get_custom_data(data_path, DATASET_SPLIT='train'):
             )
         }
 
-
     ds = ds.map(preprocess)
-
 
     # Tokenize inputs.
     def tokenize(sample):
@@ -151,9 +145,9 @@ def get_custom_data(data_path, DATASET_SPLIT='train'):
             # add_special_tokens=False,
         )
 
-
     ds = ds.map(tokenize, remove_columns=ds.column_names)
     return ds
+
 
 # ds = get_dataset(
 #     dataset_name="HuggingFaceH4/ultrachat_200k",
@@ -162,7 +156,10 @@ def get_custom_data(data_path, DATASET_SPLIT='train'):
 #     nsamples=NUM_CALIBRATION_SAMPLES,
 # )
 
-ds = get_custom_data("/workspace/zhangl98@xiaopeng.com/code/xmart-quantization-evaluation/debug/gen_msg_datas_decision.json", "train")
+ds = get_custom_data(
+    "/workspace/zhangl98@xiaopeng.com/code/xmart-quantization-evaluation/debug/gen_msg_datas_decision.json",
+    "train",
+)
 
 # config_groups = {
 #     "group_0": {
@@ -257,9 +254,9 @@ for _, module in match_named_modules(
     model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore
 ):
     if hasattr(module, "quantization_status"):
-        assert module.quantization_status == QuantizationStatus.FROZEN, (
-            f"{module.quantization_status}"
-        )
+        assert (
+            module.quantization_status == QuantizationStatus.FROZEN
+        ), f"{module.quantization_status}"
         quantized_name_set.add(re.sub(r"\d+", "X", _))
         scheme = getattr(module, "quantization_scheme", None)
         if fq:

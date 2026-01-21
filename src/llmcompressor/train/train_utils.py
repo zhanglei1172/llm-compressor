@@ -1,14 +1,9 @@
-import os
 import random
-import sys
-import time
 from dataclasses import dataclass, field
 from math import inf
 
 import torch
 import torch.nn as nn
-import transformers
-from loguru import logger
 from torch.optim.optimizer import Optimizer, required
 from transformers import TrainingArguments
 
@@ -432,6 +427,7 @@ class AdamG(Optimizer):
                     p.data.add_(-group["lr"], d_p)
 
         return loss
+
 
 class TeacherModel(nn.Module):
     def __init__(self, ori_m):

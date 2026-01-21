@@ -1,21 +1,22 @@
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
-import copy
 from transformers.utils import logging
 
-
 logger = logging.get_logger(__name__)
+
 
 # Simple layer type validation function
 def layer_type_validation(layer_types):
     """Validate layer types configuration."""
     if layer_types is None:
         return
-    
+
     valid_types = ["full_attention", "sliding_attention"]
     for layer_type in layer_types:
         if layer_type not in valid_types:
-            raise ValueError(f"Invalid layer type: {layer_type}. Must be one of {valid_types}")
+            raise ValueError(
+                f"Invalid layer type: {layer_type}. Must be one of {valid_types}"
+            )
 
 
 class Qwen3_VL_VisionConfig(PretrainedConfig):
@@ -254,7 +255,9 @@ class Qwen3_VL_Config(PretrainedConfig):
             if self.rope_scaling["type"] == "mrope":
                 self.rope_scaling["type"] = "default"
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
-        rope_config_validation(self, ignore_keys={"mrope_section", "interleaved", "hw_zero"})
+        rope_config_validation(
+            self, ignore_keys={"mrope_section", "interleaved", "hw_zero"}
+        )
 
         self.layer_types = layer_types
         if self.layer_types is None:
@@ -531,7 +534,9 @@ class Qwen3_VL_MoeConfig(PretrainedConfig):
             if self.rope_scaling["type"] == "mrope":
                 self.rope_scaling["type"] = "default"
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
-        rope_config_validation(self, ignore_keys={"mrope_section", "interleaved", "hw_zero"})
+        rope_config_validation(
+            self, ignore_keys={"mrope_section", "interleaved", "hw_zero"}
+        )
 
         # MoE arguments
         self.decoder_sparse_step = decoder_sparse_step
@@ -859,7 +864,9 @@ class Qwen3OmniMoeAudioEncoderConfig(PretrainedConfig):
         self.activation_dropout = activation_dropout
         self.num_hidden_layers = encoder_layers
         self.initializer_range = initializer_range
-        self.scale_embedding = scale_embedding  # scale factor will be sqrt(d_model) if True
+        self.scale_embedding = (
+            scale_embedding  # scale factor will be sqrt(d_model) if True
+        )
         self.max_source_positions = max_source_positions
         self.n_window = n_window
         self.output_dim = output_dim
@@ -907,6 +914,7 @@ class Qwen3OmniMoeAudioEncoderConfig(PretrainedConfig):
 #         self.initializer_range = initializer_range
 #         self.visual_multiscale_indexes = visual_multiscale_indexes
 
+
 class Qwen3_VL_VisionConfig(PretrainedConfig):
     model_type = "qwen3_vl"
     base_config_key = "vision_config"
@@ -947,6 +955,7 @@ class Qwen3_VL_VisionConfig(PretrainedConfig):
         self.img_size = img_size
         self.initializer_range = initializer_range
         self.deepstack_visual_multiscale_indexes = deepstack_visual_multiscale_indexes
+
 
 class Qwen3OmniMoeThinkerConfig(PretrainedConfig):
     r"""
@@ -1395,7 +1404,6 @@ class Qwen3OmniMoeTalkerConfig(PretrainedConfig):
 
     model_type = "qwen3_omni_talker"
 
-
     # Default tensor parallel plan for base model `Qwen3OmniMoeTalker`
     attribute_map = {
         "image_token_id": "image_token_index",
@@ -1503,6 +1511,7 @@ class Qwen3OmniMoeTalkerConfig(PretrainedConfig):
         layer_type_validation(self.layer_types)
 
         super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+
 
 class Qwen3OmniMoeDiTConfig(PretrainedConfig):
     r"""
@@ -1704,7 +1713,6 @@ class Qwen3OmniMoeToken2WavConfig(PretrainedConfig):
         super().__init__(**kwargs)
 
 
-
 class Qwen3OmniMoeConfig(PretrainedConfig):
     """
     This is the configuration class to store the configuration of a [`Qwen3OmniMoeForConditionalGeneration`]. It is used to instantiate a Qwen2.5Omni
@@ -1776,11 +1784,15 @@ class Qwen3OmniMoeConfig(PretrainedConfig):
         super().__init__(**kwargs)
         if thinker_config is None:
             thinker_config = {}
-            logger.info("thinker_config is None. Initializing thinker model with default values")
+            logger.info(
+                "thinker_config is None. Initializing thinker model with default values"
+            )
 
         if talker_config is None:
             talker_config = {}
-            logger.info("talker_config is None. Initializing talker model with default values")
+            logger.info(
+                "talker_config is None. Initializing talker model with default values"
+            )
 
         self.thinker_config = Qwen3OmniMoeThinkerConfig(**thinker_config)
         self.talker_config = Qwen3OmniMoeTalkerConfig(**talker_config)
@@ -1807,5 +1819,3 @@ class Qwen3OmniMoeConfig(PretrainedConfig):
         # except for Qwen yet. This has to be generalized if more deeply nested configs are
         # added. NOTE: currently method used only by vLLM
         return self.thinker_config.get_text_config()
-
-

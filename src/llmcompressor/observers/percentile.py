@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 
 from llmcompressor.observers.base import MinMaxTuple, Observer
@@ -160,7 +158,11 @@ def _get_percentile_min_max(observed: torch.Tensor, percentile: float) -> MinMax
     max_val = torch.quantile(max_vals, q_high)
 
     # Reshape to match the expected output shape (*qparams_shape,)
-    max_val = max_val.reshape(qparams_shape).to(device=observed.device, dtype=observed.dtype)
-    min_val = min_val.reshape(qparams_shape).to(device=observed.device, dtype=observed.dtype)
+    max_val = max_val.reshape(qparams_shape).to(
+        device=observed.device, dtype=observed.dtype
+    )
+    min_val = min_val.reshape(qparams_shape).to(
+        device=observed.device, dtype=observed.dtype
+    )
 
     return min_val, max_val

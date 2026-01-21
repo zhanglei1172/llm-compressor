@@ -4,43 +4,31 @@ import contextlib
 import copy
 import datetime
 import os
-import sys
 from io import BytesIO
-from typing import Mapping, Optional, Union
-from unittest.mock import patch
 
 import numpy as np
 import soundfile as sf
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 import yaml
-from accelerate import infer_auto_device_map, init_empty_weights
-from accelerate.hooks import attach_align_device_hook, remove_hook_from_module
+from accelerate import init_empty_weights
+from accelerate.hooks import remove_hook_from_module
 from compressed_tensors import get_execution_device
 from compressed_tensors.quantization import (
-    QuantizationArgs,
-    QuantizationScheme,
-    QuantizationStrategy,
-    QuantizationType,
     enable_quantization,
-    forward_quantize,
 )
 from datasets import concatenate_datasets, load_dataset, load_from_disk
 from easydict import EasyDict
 from loguru import logger
-from PIL import Image
 from qwen_omni_utils import process_mm_info
-from qwen_vl_utils import process_vision_info
 from torch.distributed.fsdp import (
     FullStateDictConfig,
 )
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import (
     FullyShardedDataParallel as PT_FSDP,
 )
 from torch.distributed.fsdp.fully_sharded_data_parallel import StateDictType
-from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig, AutoProcessor
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # sys.path.insert(
@@ -51,22 +39,18 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
 )
 from trl.trainer.utils import (
     DataCollatorForCompletionOnlyLM,
-    DataCollatorForLanguageModeling,
 )
 
 from llmcompressor import oneshot
 from llmcompressor.core.state import State
 from llmcompressor.modeling.qwen3_omni_moe import replace_vit_attention_inv
-from llmcompressor.modifiers.awq import AWQModifier
-from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.modifiers.transform import SpinQuantModifier
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
-from llmcompressor.recipe import Recipe
 from llmcompressor.train.fsdp_trainer import MyTrainer
 from llmcompressor.train.train_utils import LLMCTrainingArguments, TeacherModel
-from llmcompressor.utils import dispatch_for_generation, helpers
+from llmcompressor.utils import helpers
 from llmcompressor.utils.pytorch.module import (
     build_weight_tied_map_with_unionfind,
     patch_module_non_persistent_buffers,
@@ -868,8 +852,6 @@ def patch_audio_training(model):
 def patch_vit_training(model):
     module = model
 
-
-
     def forward(module, *args, **kwargs):
         pixel_values = kwargs.get("pixel_values", None)
         image_grid_thw = kwargs.get("image_grid_thw", None)
@@ -1011,7 +993,6 @@ def post_compression_thinker(state, recipe_, model, processor):
 
     print("==========================================\n\n")
 
-    from compressed_tensors.quantization import QuantizationStatus
     from compressed_tensors.utils.match import match_named_modules
 
     quantized_name_set = set()

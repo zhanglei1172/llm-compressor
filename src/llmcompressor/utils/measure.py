@@ -36,7 +36,7 @@ def torch_cosine_similarity(
     elif reduction == "none":
         return cosine_sim
     else:
-        raise ValueError(f"Unsupported reduction method.")
+        raise ValueError("Unsupported reduction method.")
 
 
 def torch_mean_square_error(
@@ -93,7 +93,7 @@ def torch_mean_square_error(
     elif reduction == "none":
         return mse
     else:
-        raise ValueError(f"Unsupported reduction method.")
+        raise ValueError("Unsupported reduction method.")
 
 
 def torch_snr_error(
@@ -150,7 +150,7 @@ def torch_snr_error(
     elif reduction == "none":
         return snr
     else:
-        raise ValueError(f"Unsupported reduction method.")
+        raise ValueError("Unsupported reduction method.")
 
 
 def torch_kl_divergence(
@@ -208,7 +208,7 @@ def torch_kl_divergence(
     elif reduction == "none":
         return kl
     else:
-        raise ValueError(f"Unsupported reduction method.")
+        raise ValueError("Unsupported reduction method.")
 
 
 def torch_sqnr(
@@ -252,10 +252,12 @@ def torch_sqnr(
     elif reduction == "none":
         return sqnr
     else:
-        raise ValueError(f"Unsupported reduction method.")
+        raise ValueError("Unsupported reduction method.")
 
 
-def torch_sqnr_as_loss(y_pred: torch.Tensor, y_real: torch.Tensor, reduction: str = "mean") -> torch.Tensor:
+def torch_sqnr_as_loss(
+    y_pred: torch.Tensor, y_real: torch.Tensor, reduction: str = "mean"
+) -> torch.Tensor:
     """Return a loss-like value (negative SQNR) so higher SQNR is lower loss."""
     return -torch_sqnr(y_pred=y_pred, y_real=y_real, reduction=reduction)
 
@@ -315,7 +317,7 @@ class MeasureRecorder:
         else:
             raise ValueError(
                 "Unsupported measurement detected. "
-                    f"PPQ only support mse, snr, sqnr and cosine now, while {measurement} was given."
+                f"PPQ only support mse, snr, sqnr and cosine now, while {measurement} was given."
             )
 
         self.measure_fn = measure_fn

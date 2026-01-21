@@ -93,9 +93,9 @@ for prefix, module in tqdm(
     desc="Compressing model",
 ):
     try:
-        assert module.quantization_status == QuantizationStatus.FROZEN, (
-            f"{module.quantization_status}"
-        )
+        assert (
+            module.quantization_status == QuantizationStatus.FROZEN
+        ), f"{module.quantization_status}"
     except:
         print(f"Quantization status is not frozen for {module}")
     delattr(module, "quantization_status")

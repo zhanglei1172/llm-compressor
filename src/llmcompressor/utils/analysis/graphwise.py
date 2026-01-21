@@ -98,6 +98,7 @@ class OutputRecorder:
             hook.remove()
         self._hooks = []
 
+
 @torch.no_grad()
 def graphwise_error_analyse(
     model: torch.nn.Module,

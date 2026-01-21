@@ -13,15 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+from collections.abc import MutableMapping
 from typing import Callable, Optional, Union
 
 import torch
 import torch.nn.functional as F
-
 from transformers.cache_utils import Cache
 from transformers.configuration_utils import PretrainedConfig
-from collections.abc import MutableMapping
-from transformers.utils.import_utils import is_torch_flex_attn_available, is_torch_greater_or_equal, is_torchdynamo_compiling
+from transformers.utils.import_utils import (
+    is_torch_flex_attn_available,
+    is_torch_greater_or_equal,
+    is_torchdynamo_compiling,
+)
 
 
 class GeneralInterface(MutableMapping):
@@ -66,7 +69,9 @@ class GeneralInterface(MutableMapping):
 
 
 if is_torch_flex_attn_available():
-    from torch.nn.attention.flex_attention import _DEFAULT_SPARSE_BLOCK_SIZE as flex_default_block_size  # noqa: N811
+    from torch.nn.attention.flex_attention import (
+        _DEFAULT_SPARSE_BLOCK_SIZE as flex_default_block_size,  # noqa: N811
+    )
     from torch.nn.attention.flex_attention import BlockMask, create_block_mask
 else:
     # Register a fake type to avoid crashing for annotations and `isinstance` checks
@@ -82,7 +87,9 @@ if _is_torch_greater_or_equal_than_2_6:
 def and_masks(*mask_functions: list[Callable]) -> Callable:
     """Returns a mask function that is the intersection of provided mask functions"""
     if not all(callable(arg) for arg in mask_functions):
-        raise RuntimeError(f"All inputs should be callable mask_functions: {mask_functions}")
+        raise RuntimeError(
+            f"All inputs should be callable mask_functions: {mask_functions}"
+        )
 
     def and_mask(batch_idx, head_idx, q_idx, kv_idx):
         result = q_idx.new_ones((), dtype=torch.bool)
@@ -96,7 +103,9 @@ def and_masks(*mask_functions: list[Callable]) -> Callable:
 def or_masks(*mask_functions: list[Callable]) -> Callable:
     """Returns a mask function that is the union of provided mask functions"""
     if not all(callable(arg) for arg in mask_functions):
-        raise RuntimeError(f"All inputs should be callable mask_functions: {mask_functions}")
+        raise RuntimeError(
+            f"All inputs should be callable mask_functions: {mask_functions}"
+        )
 
     def or_mask(batch_idx, head_idx, q_idx, kv_idx):
         result = q_idx.new_zeros((), dtype=torch.bool)
@@ -107,7 +116,9 @@ def or_masks(*mask_functions: list[Callable]) -> Callable:
     return or_mask
 
 
-def causal_mask_function(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+def causal_mask_function(
+    batch_idx: int, head_idx: int, q_idx: int, kv_idx: int
+) -> bool:
     """
     This creates a basic lower-diagonal causal mask.
     """
@@ -162,7 +173,9 @@ def padding_mask_function(padding_mask: torch.Tensor) -> Callable:
     return inner_mask
 
 
-def add_offsets_to_mask_function(mask_function: Callable, q_offset: int, kv_offset: int) -> Callable:
+def add_offsets_to_mask_function(
+    mask_function: Callable, q_offset: int, kv_offset: int
+) -> Callable:
     """
     This function adds the correct offsets to the `q_idx` and `kv_idx` as the torch API can only accept lengths,
     not start and end indices.
@@ -202,7 +215,10 @@ def _vmap_for_bhqkv(mask_function: Callable, bh_indices: bool = True) -> Callabl
 
 
 def prepare_padding_mask(
-    attention_mask: Optional[torch.Tensor], kv_length: int, kv_offset: int, _slice: bool = True
+    attention_mask: Optional[torch.Tensor],
+    kv_length: int,
+    kv_offset: int,
+    _slice: bool = True,
 ) -> Optional[torch.Tensor]:
     """
     From the 2D attention mask, prepare the correct padding mask to use by potentially padding it, and slicing
@@ -212,7 +228,9 @@ def prepare_padding_mask(
     if attention_mask is not None:
         # Pad it if necesary
         if (padding_length := kv_length + kv_offset - attention_mask.shape[-1]) > 0:
-            local_padding_mask = torch.nn.functional.pad(attention_mask, (0, padding_length))
+            local_padding_mask = torch.nn.functional.pad(
+                attention_mask, (0, padding_length)
+            )
         # For flex, we should not slice them, only use an offset
         if _slice:
             # Equivalent to: `local_padding_mask = attention_mask[:, kv_offset : kv_offset + kv_length]`,
@@ -238,7 +256,11 @@ def _ignore_causal_mask_sdpa(
     allowing to dispatch to the flash attention kernel (that can otherwise not be used if a custom `attn_mask` is
     passed).
     """
-    is_tracing = torch.jit.is_tracing() or isinstance(padding_mask, torch.fx.Proxy) or is_torchdynamo_compiling()
+    is_tracing = (
+        torch.jit.is_tracing()
+        or isinstance(padding_mask, torch.fx.Proxy)
+        or is_torchdynamo_compiling()
+    )
     if padding_mask is not None and padding_mask.shape[-1] > kv_length:
         mask_indices = torch.arange(kv_length, device=padding_mask.device)
         mask_indices += kv_offset
@@ -368,10 +390,14 @@ def sdpa_mask_recent_torch(
     """
     q_length = cache_position.shape[0]
     # Potentially pad the 2D mask, and slice it correctly
-    padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset, _slice=False)
+    padding_mask = prepare_padding_mask(
+        attention_mask, kv_length, kv_offset, _slice=False
+    )
 
     # Under specific conditions, we can avoid materializing the mask, instead relying on the `is_causal` argument
-    if allow_is_causal_skip and _ignore_causal_mask_sdpa(padding_mask, q_length, kv_length, kv_offset, local_size):
+    if allow_is_causal_skip and _ignore_causal_mask_sdpa(
+        padding_mask, q_length, kv_length, kv_offset, local_size
+    ):
         return None
 
     # Similar to `kv_arange = torch.arange(start=kv_offset, end=kv_offset + kv_length, device=cache_position.device)`
@@ -389,7 +415,9 @@ def sdpa_mask_recent_torch(
     # scalar tensor (it internally calls `.item()` which vmap does not allow, but this context works around it
     # We don't need to add an offset to the mask_function either, as we vmap directly the correct indices for k and kv indices
     with TransformGetItemToIndex():
-        causal_mask = _vmap_for_bhqkv(mask_function)(batch_arange, head_arange, cache_position, kv_arange)
+        causal_mask = _vmap_for_bhqkv(mask_function)(
+            batch_arange, head_arange, cache_position, kv_arange
+        )
 
     return causal_mask
 
@@ -443,7 +471,9 @@ def sdpa_mask_older_torch(
     padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset)
 
     # Under specific conditions, we can avoid materializing the mask, instead relying on the `is_causal` argument
-    if allow_is_causal_skip and _ignore_causal_mask_sdpa(padding_mask, q_length, kv_length, kv_offset, local_size):
+    if allow_is_causal_skip and _ignore_causal_mask_sdpa(
+        padding_mask, q_length, kv_length, kv_offset, local_size
+    ):
         return None
 
     # Similar to `kv_arange = torch.arange(start=kv_offset, end=kv_offset + kv_length, device=cache_position.device)`
@@ -455,7 +485,9 @@ def sdpa_mask_older_torch(
     # as vmap cannot handle slicing a tensor from scalar tensor (it internally calls `.item()` which vmap does not allow
     # However, in more recent version of Pytorch, a trick was introduced to handle it - which is the reason we have
     # `sdpa_mask_recent_torch`, as it allows more general `mask_function`
-    causal_mask = _vmap_for_bhqkv(mask_function, bh_indices=False)(None, None, cache_position, kv_arange)
+    causal_mask = _vmap_for_bhqkv(mask_function, bh_indices=False)(
+        None, None, cache_position, kv_arange
+    )
     causal_mask = causal_mask[None, None, :, :].expand(batch_size, -1, -1, -1)
     if padding_mask is not None:
         causal_mask = causal_mask * padding_mask[:, None, None, :]
@@ -469,7 +501,11 @@ def sdpa_mask_older_torch(
 
 # We use the version with newer torch whenever possible, as it is more general and can handle arbitrary mask functions
 # (especially mask_function indexing a tensor, such as the padding mask function)
-sdpa_mask = sdpa_mask_recent_torch if _is_torch_greater_or_equal_than_2_6 else sdpa_mask_older_torch
+sdpa_mask = (
+    sdpa_mask_recent_torch
+    if _is_torch_greater_or_equal_than_2_6
+    else sdpa_mask_older_torch
+)
 
 
 def eager_mask(
@@ -518,7 +554,9 @@ def eager_mask(
     )
     min_dtype = torch.finfo(dtype).min
     # we need 0s where the tokens should be taken into account, and -inf otherwise (mask is already of boolean type)
-    mask = torch.where(mask, torch.tensor(0.0, device=mask.device, dtype=dtype), min_dtype)
+    mask = torch.where(
+        mask, torch.tensor(0.0, device=mask.device, dtype=dtype), min_dtype
+    )
     return mask
 
 
@@ -594,12 +632,18 @@ def flex_attention_mask(
     if attention_mask is not None:
         # Older torch (2.5.x) cannot handle sequences not in multiples of 128 (default block size)
         # Hence we pad to multiples of this as a minimum to ensure this
-        pad_len = ((attention_mask.shape[1] // flex_default_block_size) + 1) * flex_default_block_size
+        pad_len = (
+            (attention_mask.shape[1] // flex_default_block_size) + 1
+        ) * flex_default_block_size
         pad_len = pad_len - attention_mask.shape[1]
         if not _is_torch_greater_or_equal_than_2_6 and pad_len > 0:
-            attention_mask = torch.nn.functional.pad(attention_mask, value=0, pad=(0, pad_len))
+            attention_mask = torch.nn.functional.pad(
+                attention_mask, value=0, pad=(0, pad_len)
+            )
 
-        padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset, _slice=False)
+        padding_mask = prepare_padding_mask(
+            attention_mask, kv_length, kv_offset, _slice=False
+        )
         mask_function = and_masks(mask_function, padding_mask_function(padding_mask))
 
     # Add the offsets on top (because flex interface only allows length, not start and end indices)
@@ -673,7 +717,10 @@ def _preprocess_mask_arguments(
             An offset to indicate at which first position the key and values states will refer to.
     """
     # If the mask is already 4D, simply return as-is (it was already prepared, or it is custom)
-    if isinstance(attention_mask, (torch.Tensor, BlockMask)) and len(attention_mask.shape) == 4:
+    if (
+        isinstance(attention_mask, (torch.Tensor, BlockMask))
+        and len(attention_mask.shape) == 4
+    ):
         return True, attention_mask, None, None
 
     # For TGI/vLLM backends, or other custom attention without equivalent mask creation: we don't need a mask!
@@ -686,7 +733,9 @@ def _preprocess_mask_arguments(
 
     # Move the mask to correct device, and potentially switch dtype for efficiency
     if attention_mask is not None and attention_mask.ndim == 2:
-        attention_mask = attention_mask.to(device=cache_position.device, dtype=torch.bool)
+        attention_mask = attention_mask.to(
+            device=cache_position.device, dtype=torch.bool
+        )
 
     # If using a cache, it can give all informations about mask sizes based on seen tokens
     if past_key_values is not None:
@@ -750,17 +799,23 @@ def create_causal_mask(
 
     # Do not allow skip if we are compiling (this is to match BC)
     # TODO: cyril -> probably revisit and remove this, but a lot of tests rely on it
-    allow_is_causal_skip = not past_key_values.is_compileable if past_key_values is not None else True
+    allow_is_causal_skip = (
+        not past_key_values.is_compileable if past_key_values is not None else True
+    )
 
     # Allow slight deviations from causal mask
     if or_mask_function is not None:
         if not _is_torch_greater_or_equal_than_2_6:
-            raise ValueError("Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6")
+            raise ValueError(
+                "Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6"
+            )
         mask_factory_function = or_masks(mask_factory_function, or_mask_function)
         allow_is_causal_skip = False
     if and_mask_function is not None:
         if not _is_torch_greater_or_equal_than_2_6:
-            raise ValueError("Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6")
+            raise ValueError(
+                "Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6"
+            )
         mask_factory_function = and_masks(mask_factory_function, and_mask_function)
         allow_is_causal_skip = False
 
@@ -828,7 +883,9 @@ def create_sliding_window_causal_mask(
 
     sliding_window = getattr(config, "sliding_window", None)
     if sliding_window is None:
-        raise ValueError("Could not find a `sliding_window` argument in the config, or it is not set")
+        raise ValueError(
+            "Could not find a `sliding_window` argument in the config, or it is not set"
+        )
 
     batch_size, dtype = input_embeds.shape[0], input_embeds.dtype
     mask_factory_function = sliding_window_causal_mask_function(sliding_window)
@@ -836,17 +893,23 @@ def create_sliding_window_causal_mask(
 
     # Do not allow skip if we are compiling (this is to match BC)
     # TODO: cyril -> probably revisit and remove this, but a lot of tests rely on it
-    allow_is_causal_skip = not past_key_values.is_compileable if past_key_values is not None else True
+    allow_is_causal_skip = (
+        not past_key_values.is_compileable if past_key_values is not None else True
+    )
 
     # Allow slight deviations from sliding causal mask
     if or_mask_function is not None:
         if not _is_torch_greater_or_equal_than_2_6:
-            raise ValueError("Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6")
+            raise ValueError(
+                "Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6"
+            )
         mask_factory_function = or_masks(mask_factory_function, or_mask_function)
         allow_is_causal_skip = False
     if and_mask_function is not None:
         if not _is_torch_greater_or_equal_than_2_6:
-            raise ValueError("Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6")
+            raise ValueError(
+                "Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6"
+            )
         mask_factory_function = and_masks(mask_factory_function, and_mask_function)
         allow_is_causal_skip = False
 
@@ -915,10 +978,15 @@ def create_chunked_causal_mask(
 
     chunk_size = getattr(config, "attention_chunk_size", None)
     if chunk_size is None:
-        raise ValueError("Could not find an `attention_chunk_size` argument in the config, or it is not set")
+        raise ValueError(
+            "Could not find an `attention_chunk_size` argument in the config, or it is not set"
+        )
 
     # Raise if using chunked attention on context too large with FA2
-    if config._attn_implementation == "flash_attention_2" and kv_length + kv_offset > chunk_size:
+    if (
+        config._attn_implementation == "flash_attention_2"
+        and kv_length + kv_offset > chunk_size
+    ):
         raise ValueError(
             "Flash attention 2 cannot handle chunked attention, and the key-value length is larger than the chunk size so the "
             "chunked pattern cannot be respected. You should use another `attn_implementation` when instantiating the model"
@@ -930,17 +998,23 @@ def create_chunked_causal_mask(
 
     # Do not allow skip if we are compiling (this is to match BC)
     # TODO: cyril -> probably revisit and remove this, but a lot of tests rely on it
-    allow_is_causal_skip = not past_key_values.is_compileable if past_key_values is not None else True
+    allow_is_causal_skip = (
+        not past_key_values.is_compileable if past_key_values is not None else True
+    )
 
     # Allow slight deviations from chunked causal mask
     if or_mask_function is not None:
         if not _is_torch_greater_or_equal_than_2_6:
-            raise ValueError("Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6")
+            raise ValueError(
+                "Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6"
+            )
         mask_factory_function = or_masks(mask_factory_function, or_mask_function)
         allow_is_causal_skip = False
     if and_mask_function is not None:
         if not _is_torch_greater_or_equal_than_2_6:
-            raise ValueError("Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6")
+            raise ValueError(
+                "Using `or_mask_function` or `and_mask_function` arguments require torch>=2.6"
+            )
         mask_factory_function = and_masks(mask_factory_function, and_mask_function)
         allow_is_causal_skip = False
 
@@ -1018,7 +1092,9 @@ def create_masks_for_generate(
     if hasattr(effective_config, "layer_types"):
         causal_masks = {}
         for layer_pattern in set(effective_config.layer_types):
-            causal_masks[layer_pattern] = LAYER_PATTERN_TO_MASK_FUNCTION_MAPPING[layer_pattern](**mask_kwargs)
+            causal_masks[layer_pattern] = LAYER_PATTERN_TO_MASK_FUNCTION_MAPPING[
+                layer_pattern
+            ](**mask_kwargs)
         return causal_masks
     # In this case, all layers are sliding
     elif getattr(effective_config, "sliding_window", None) is not None:
@@ -1064,7 +1140,9 @@ YELLOW_SQUARE = f"{YELLOW}{BLACK_SQUARE}{RESET}"
 GREEN_SQUARE = f"{GREEN}{BLACK_SQUARE}{RESET}"
 
 
-def tensor_to_mask_visual(original_tensor: torch.Tensor, grid_size=(20, 40), style="majong") -> str:
+def tensor_to_mask_visual(
+    original_tensor: torch.Tensor, grid_size=(20, 40), style="majong"
+) -> str:
     BLACK_SQUARE, WHITE_SQUARE, LOW_TRIANGLE, UPPER_TRIANGLE = get_style(style)
     h, w = original_tensor.shape
     max_h, max_w = grid_size
@@ -1079,8 +1157,12 @@ def tensor_to_mask_visual(original_tensor: torch.Tensor, grid_size=(20, 40), sty
             w = max(1, round(max_h * aspect_ratio))
 
         # Step 1: Rescale tensor by average pooling
-        tensor = original_tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
-        tensor = F.adaptive_avg_pool2d(tensor, output_size=(h, w))[0, 0]  # Remove extra dims
+        tensor = original_tensor.unsqueeze(0).unsqueeze(
+            0
+        )  # Add batch and channel dimensions
+        tensor = F.adaptive_avg_pool2d(tensor, output_size=(h, w))[
+            0, 0
+        ]  # Remove extra dims
     else:
         tensor = original_tensor
 
@@ -1108,7 +1190,11 @@ def tensor_to_mask_visual(original_tensor: torch.Tensor, grid_size=(20, 40), sty
                         else (
                             WHITE_SQUARE
                             if tensor[i, j] == 0
-                            else (UPPER_TRIANGLE if tensor[i, j + 1] == 1 else LOW_TRIANGLE)
+                            else (
+                                UPPER_TRIANGLE
+                                if tensor[i, j + 1] == 1
+                                else LOW_TRIANGLE
+                            )
                         )
                     )
         result.append(row)
@@ -1132,13 +1218,21 @@ class AttentionMask(torch.Tensor):
         *batch_dims, num_rows, num_cols = dense_mask.shape
         total_vis = []
 
-        for idx, batch_idx in enumerate(itertools.product(*[range(i) for i in batch_dims])):
+        for idx, batch_idx in enumerate(
+            itertools.product(*[range(i) for i in batch_dims])
+        ):
             if idx == limit:
                 total_vis.append("...")
-                total_vis.append("To print out more, set AttentionMask.to_string(limit=N)")
-                total_vis.append("You can also index (AttentionMask[batch, head]) to choose a specific batch or head")
+                total_vis.append(
+                    "To print out more, set AttentionMask.to_string(limit=N)"
+                )
+                total_vis.append(
+                    "You can also index (AttentionMask[batch, head]) to choose a specific batch or head"
+                )
                 break
-            block_vis = tensor_to_mask_visual(dense_mask[batch_idx], grid_size=grid_size, style=self.style)
+            block_vis = tensor_to_mask_visual(
+                dense_mask[batch_idx], grid_size=grid_size, style=self.style
+            )
             total_vis.append(block_vis)
 
         total_vis.append(f"torch.Tensor(shape={tuple(self.shape)}, dtype={self.dtype})")
@@ -1151,7 +1245,9 @@ class AttentionMask(torch.Tensor):
         return self.to_string()
 
     @classmethod
-    def from_tensor(cls, tensor: torch.Tensor, style: Optional[str] = None) -> "AttentionMask":
+    def from_tensor(
+        cls, tensor: torch.Tensor, style: Optional[str] = None
+    ) -> "AttentionMask":
         res = cls(tensor)
         res.style = style
         return res

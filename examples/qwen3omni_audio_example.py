@@ -7,16 +7,11 @@ import torch
 from accelerate.hooks import remove_hook_from_module
 from compressed_tensors import get_execution_device
 from compressed_tensors.quantization import (
-    QuantizationArgs,
-    QuantizationScheme,
-    QuantizationStrategy,
-    QuantizationType,
     forward_quantize,
 )
 from datasets import load_dataset
 from qwen_omni_utils import process_mm_info
-from qwen_vl_utils import process_vision_info
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
 )
@@ -27,7 +22,6 @@ from llmcompressor.modeling.qwen3_omni_moe import (
     replace_audio_embedding,
     replace_rmsnorm,
 )
-from llmcompressor.modifiers.awq import mappings as awq_mappings
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
 from llmcompressor.transformers.compression.compressed_tensors_utils import (
@@ -371,7 +365,6 @@ print("==========================================\n\n")
 # SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-awq-sym2"
 from compressed_tensors.quantization import QuantizationStatus
 from compressed_tensors.utils.match import match_named_modules
-from tqdm import tqdm
 
 # for prefix, module in tqdm(
 #     match_named_modules(
@@ -401,9 +394,6 @@ SAVE_DIR = (
     + f"-{flag}-sym-com-audio"
     + ("-realq" if realq else ("-fq" if fq else "-trans"))
 )
-from llmcompressor.transformers.compression.compressed_tensors_utils import (
-    modify_save_pretrained,
-)
 
 if realq:
     modify_save_pretrained(model)
@@ -424,9 +414,9 @@ for _, module in match_named_modules(
     model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore
 ):
     if hasattr(module, "quantization_status"):
-        assert module.quantization_status == QuantizationStatus.FROZEN, (
-            f"{module.quantization_status}"
-        )
+        assert (
+            module.quantization_status == QuantizationStatus.FROZEN
+        ), f"{module.quantization_status}"
         quantized_name_set.add(re.sub(r"\d+", "X", _))
         scheme = getattr(module, "quantization_scheme", None)
         if fq:

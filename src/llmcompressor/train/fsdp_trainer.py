@@ -1,18 +1,11 @@
-import functools
 import os
-from collections import defaultdict
-from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import nni
 
 # isort: on
-import numpy as np
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator
-from accelerate.utils import DistributedDataParallelKwargs, TorchDynamoPlugin
 from compressed_tensors.transform.factory.base import TransformBase
-from packaging import version
 from torch import nn
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     _CHECKPOINT_WRAPPED_MODULE,
@@ -25,19 +18,9 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.fully_sharded_data_parallel import StateDictType
 from transformers import Trainer
-from transformers.modeling_utils import PreTrainedModel
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_callback import (
-    TrainerCallback,
-)
-from transformers.trainer_utils import (
-    EvalPrediction,
-)
 
 from llmcompressor.utils.pytorch.module import (
     patch_module_to_cuda,
-    patch_tensor_to_cuda,
-    tensor_to_cuda,
 )
 
 from .train_utils import SGDG
@@ -258,7 +241,7 @@ class MyTrainer(Trainer):
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         import geoopt
-        from geoopt.manifolds import EuclideanStiefel, Stiefel
+        from geoopt.manifolds import Stiefel
 
         with patch_module_to_cuda(torch.nn.Module):
             for m in self.uniq_mods:  # 避免同参数占用多份导致OOM
