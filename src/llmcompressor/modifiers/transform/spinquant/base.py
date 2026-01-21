@@ -11,6 +11,7 @@ from compressed_tensors.transform import (
 )
 from compressed_tensors.utils import TorchDtype, get_head_dim
 from pydantic import Field, ValidationInfo, field_validator
+from torch.utils._pytree import tree_leaves
 from transformers import PreTrainedModel
 
 from llmcompressor.core import Event, EventType, State
@@ -209,9 +210,6 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
         replace_parametrizations_to_weights(model, self.skip_weights_folding)
 
     def _get_targets(self, model: torch.nn.Module) -> NamedModules:
-        if not self.initialized_:
-            raise ValueError("Cannot get targets before modifier has been initialized")
-
         return [
             (name, module)
             for scheme in self.transform_config.config_groups.values()
@@ -248,13 +246,10 @@ class SpinQuantModifier(Modifier, use_enum_values=True):
             for norm, *linears in match_modules_set(
                 model, (mapping.norm, *mapping.linears)
             ):
-                norm = norm[0]
-                linears_flatten = []
-                for linear in linears:
-                    linears_flatten.extend(linear)
-                fuse_norm_linears(norm, linears_flatten)
-                name = get_module_name(model, norm)
-                replace_ln_to_rmsnorm(name, norm, model)
+                assert len(norm) == 1
+                fuse_norm_linears(norm[0], tree_leaves(linears))
+                name = get_module_name(model, norm[0])
+                replace_ln_to_rmsnorm(name, norm[0], model)
             if name is None:
                 logger.warning(
                     f"Could not find norm {mapping.norm} and linears "

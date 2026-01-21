@@ -51,7 +51,7 @@ def get_calib_dataset(tokenizer):
 
 
 if __name__ == "__main__":
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype="auto")
+    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype="auto")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
     ###

@@ -64,28 +64,28 @@ class IntermediatesCache:
         cls,
         dataloader: torch.utils.data.DataLoader,
         model_device: torch.device = torch.device("cpu"),
-        mask_padding: bool = True,
         offload_device: Optional[torch.device] = torch.device("cpu"),
     ):
         """
         Initialize a cache with data from the provided dataloader
 
+        This method iterates through all batches in the dataloader and offloads
+        them to the specified device. For faster cache preparation, consider:
+        - Increasing batch_size to reduce the number of iterations
+        - Using num_workers > 0 in the DataLoader for parallel loading
+        - Ensuring data preprocessing is done before creating the dataloader
+
         :param dataloader: dataloader which generates values to be cached
         :param model_device: device which values will be onloaded to when fetched
-        :param mask_padding: zero out padding tokens if True. This affects modifiers
-            such as GPTQ and SparseGPT
         :param offload_device: device to offload values to
         """
-        # note: list comprehesion was found to not improve performance
-        batch_intermediates = []
-        for batch in tqdm(dataloader, desc="Preparing cache"):
-            values = {}
-            for key, value in batch.items():
-                if mask_padding and (key == "input_ids") and "attention_mask" in batch:
-                    value = cls._mask_padding(value, batch["attention_mask"])
-                values[key] = cls._offload_value(value, offload_device, model_device)
-
-            batch_intermediates.append(values)
+        batch_intermediates = [
+            {
+                key: cls._offload_value(value, offload_device, model_device)
+                for key, value in batch.items()
+            }
+            for batch in tqdm(dataloader, desc="Preparing cache")
+        ]
 
         return cls(batch_intermediates, offload_device)
 
@@ -274,14 +274,3 @@ class IntermediatesCache:
                 ):
                     warnings.warn(f"Offloading not implemented for type {type(value)}.")
                 return IntermediateValue(value=value, device=None)
-
-    @staticmethod
-    def _mask_padding(
-        input_ids: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        if attention_mask.dim() == 4:
-            # some attention masks, such as those from pixtral, are are 4d
-            attention_mask = attention_mask[0, 0, 0].unsqueeze(0)
-
-        # Assumes that `attention_mask` only contains zeros and ones
-        return input_ids * attention_mask

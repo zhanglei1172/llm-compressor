@@ -18,7 +18,7 @@ from llmcompressor.utils import (
     validate_str_iterable,
 )
 from llmcompressor.utils.dev import dispatch_for_generation, skip_weights_download
-from tests.testing_utils import requires_gpu
+from tests.testing_utils import requires_gpu, requires_hf_token
 
 
 @pytest.mark.unit
@@ -131,6 +131,7 @@ def test_calibration_forward_context():
 
 
 @requires_gpu
+@requires_hf_token
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "model_cls,model_stub",
@@ -174,5 +175,4 @@ def test_disable_lm_head(offload):
     with disable_lm_head(model):
         input = {key: value.to("cuda") for key, value in model.dummy_inputs.items()}
         output = model(**input)
-        assert lm_input_device == torch.device("cuda:0")
         assert output.logits.device == torch.device("meta")

@@ -68,8 +68,9 @@ def fuse_norm_linears(norm: torch.nn.Module, linears: Iterable[torch.nn.Linear])
         new_bias = None
         # NOTE: spinquant does this op in float64
         exec_device = get_execution_device(norm)
-        with align_module_device(norm, exec_device), align_module_device(
-            linear, exec_device
+        with (
+            align_module_device(norm, exec_device),
+            align_module_device(linear, exec_device),
         ):
             fc_hidden_size = linear.weight.shape[-1]
             ln_hidden_size = norm.weight.shape[-1]
