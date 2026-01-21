@@ -17,8 +17,8 @@ from transformers import AutoConfig, AutoProcessor
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
 )
-from trl.trainer.utils import (
-    DataCollatorForCompletionOnlyLM,
+from trl.trainer.sft_trainer import (
+    DataCollatorForLanguageModeling,
 )
 
 from llmcompressor.core.state import State
@@ -379,7 +379,7 @@ def pre_compression_thinker(model):
     return state, recipe_, model
 
 
-class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
+class DataCollatorForQwen3OmniDataset(DataCollatorForLanguageModeling):
     def __init__(self, processor):
         self.processor = processor
         # Prepare the constants

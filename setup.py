@@ -148,7 +148,7 @@ setup(
         (
             "compressed-tensors==0.13.0"
             if BUILD_TYPE == "release"
-            else "compressed-tensors>=0.13.1a2"
+            else "compressed-tensors @ git+ssh://git@github.com/zhanglei1172/compressed-tensors.git@510d67d7573b10347aaf4a8d4dacef8cc4842ee9"
         ),
     ],
     extras_require={

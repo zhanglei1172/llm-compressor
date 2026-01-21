@@ -37,9 +37,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
 )
-from trl.trainer.utils import (
-    DataCollatorForCompletionOnlyLM,
-)
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 from llmcompressor import oneshot
 from llmcompressor.core.state import State
@@ -167,8 +165,8 @@ flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
 enable_modality = {
     # "vit",
-    "aut",
-    # "text"
+    # "aut",
+    "text"
 }
 model_dtype = torch.bfloat16
 #################### configurations ####################
@@ -178,7 +176,7 @@ if pretrain == "ostq":
     MODEL_ID = "/code/omni_ostq_wa_bf16/transformed_model/"
 else:
     # MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-Thinking/"
-    MODEL_ID = "/tmp/Qwen3-Omni-Thinking-origin-spinquant(vit,)-trans-origin-spinquant(text,)-trans"
+    MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
 flag += str(tuple(enable_modality)).replace("'", "")
 
@@ -199,7 +197,7 @@ ds_al = load_dataset(
     split=f"test[:{NUM_CALIBRATION_SAMPLES}]",
 )
 ds_text = load_dataset(
-    "hkust-nlp/deita-6k-v0", split=f"train[:{NUM_CALIBRATION_SAMPLES}]"
+    "HuggingFaceH4/ultrachat_200k", split=f"train_sft[:{NUM_CALIBRATION_SAMPLES}]"
 )
 ds_wiki = load_from_disk("/dataset/workspace/zhangl98/dataset/calib/wikitext2/")
 
@@ -330,6 +328,23 @@ def format_as_text_messages(example, prompt: str | None = None):
     ]
     return {"messages": conversations}
 
+def format_chat_as_messages(example):
+    """Format single example into messages format for TRL."""
+    # example["image"] is PIL image, convert it to base64
+    messages = []
+    for conversation in example["messages"]:
+        message = {
+            "role": conversation["role"],
+            "content": [],
+        }
+        content = conversation["content"]
+        message["content"].append({"type": "text", "text": content})
+        messages.append(message)
+
+    return {
+        "messages": messages,
+    }
+
 
 ds_vl = ds_vl.map(
     format_as_messages,
@@ -345,7 +360,7 @@ ds_al = ds_al.map(
     fn_kwargs={"prompt": "Please transcribe the audio."},
 )
 ds_text = ds_text.map(
-    format_as_messages,
+    format_chat_as_messages,
     remove_columns=ds_text.column_names,
     # num_proc=6,
     # fn_kwargs={"prompt": "Please transcribe the audio."},
@@ -687,7 +702,7 @@ def pre_compression_thinker(model):
     return state, recipe_, model
 
 
-class DataCollatorForQwen3OmniDataset(DataCollatorForCompletionOnlyLM):
+class DataCollatorForQwen3OmniDataset(DataCollatorForLanguageModeling):
     def __init__(self, processor):
         self.processor = processor
         # Prepare the constants
