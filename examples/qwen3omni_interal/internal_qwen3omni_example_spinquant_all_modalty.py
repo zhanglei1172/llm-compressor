@@ -160,23 +160,23 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 
 #################### configurations ####################
 # Select model and load it.
-pretrain = "origin"
+pretrain = "ostq"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
 enable_modality = {
     # "vit",
-    # "aut",
-    "text"
+    "aut",
+    # "text"
 }
 model_dtype = torch.bfloat16
 #################### configurations ####################
 
 
 if pretrain == "ostq":
-    MODEL_ID = "/code/omni_ostq_wa_bf16/transformed_model/"
+    MODEL_ID = "/tmp/qwen3omni_hf_v3_01000-liuding-origin-spinquant(vit,)-trans-ostq-spinquant(text,)-trans"
 else:
     # MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-Thinking/"
-    MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+    MODEL_ID = "/dataset/workspace/liuding/workspace/Qwen3-Omni-Talker-sft/hf_model/qwen3omni_hf_v3_01000-liuding/"
 
 flag += str(tuple(enable_modality)).replace("'", "")
 
@@ -1057,7 +1057,7 @@ def dist_load_model(model_path=MODEL_ID, load_processor=False):
                 model_path, trust_remote_code=True
             )
         model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
-            model_path, torch_dtype=model_dtype
+            model_path, config=model_config, torch_dtype=model_dtype
         )
     return model, processor
 
@@ -1073,6 +1073,7 @@ if __name__ == "__main__":
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     RANK_OTHER = dist.is_initialized() and dist.get_rank() != 0
     model_config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
+    model_config.enable_audio_output = False
     if RANK_OTHER:
         logger.remove()
     model, processor = dist_load_model(load_processor=True)

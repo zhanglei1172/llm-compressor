@@ -65,7 +65,7 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
 pretrain = "ostq"
 recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
 # recipe = "examples/qwen3_omni_configs/text/mse_w4a8.yaml"
-flag = "gptq-moeall"
+flag = "gptq"
 # flag = "mse_w4a8"
 fq = True  # False
 realq = False
@@ -153,9 +153,10 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
 
 
 if pretrain == "ostq":
-    MODEL_ID = "/dataset/workspace/zhangl98/qwenomni-exp/Qwen3-Omni-Thinking-origin-spinquant(vit)-trans-origin-spinquant(text)-trans-origin-spinquant(aut)-trans/"
+    MODEL_ID = "/tmp/qwen3omni_hf_v3_01000-liuding-origin-spinquant(vit,)-trans-ostq-spinquant(text,)-trans-ostq-spinquant(aut,)-trans"
+    # MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-origin-spinquant(text,)-trans"
 else:
-    MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+    MODEL_ID = "/dataset/workspace/liuding/workspace/Qwen3-Omni-Talker-sft/hf_model/qwen3omni_hf_v3_01000-liuding/"
 
 
 # Select calibration dataset.
@@ -345,7 +346,7 @@ for module, child_name in to_removes:
 # Confirm generations of the quantized model look sane.
 print("\n\n")
 print("========== SAMPLE GENERATION ==============")
-dispatch_for_generation(model)
+# dispatch_for_generation(model)
 messages = [
     {
         "role": "user",
