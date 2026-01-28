@@ -32,6 +32,14 @@ no-build-isolation-package = ['flash-attn']
 [tool.uv.sources]
 compressed-tensors = { git = "ssh://git@github.com/zhanglei1172/compressed-tensors.git", rev = "510d67d7573b10347aaf4a8d4dacef8cc4842ee9" }
 
+[project.optional-dependencies]
+build = ["torch", "setuptools", "packaging"]
+compile = ["flash-attn"]
+
+[[tool.uv.dependency-metadata]]
+name = "flash-attn"
+requires-dist = ["torch", "einops"]
+
 [dependency-groups]
 dev = [
     "absl-py==2.3.1",
