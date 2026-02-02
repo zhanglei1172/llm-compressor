@@ -2,12 +2,13 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llmcompressor import oneshot
+from llmcompressor.modifiers.quantization import GPTQModifier
 from llmcompressor.utils import dispatch_for_generation
 
 # Select model and load it.
-MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
-model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype="auto")
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto")
+tokenizer = AutoTokenizer.from_pretrained(model_id)
 
 # Select calibration dataset.
 DATASET_ID = "HuggingFaceH4/ultrachat_200k"
@@ -23,10 +24,22 @@ ds = load_dataset(DATASET_ID, split=f"{DATASET_SPLIT}[:{NUM_CALIBRATION_SAMPLES}
 ds = ds.shuffle(seed=42)
 
 
-def process_and_tokenize(example):
-    text = tokenizer.apply_chat_template(example["messages"], tokenize=False)
+def preprocess(example):
+    return {
+        "text": tokenizer.apply_chat_template(
+            example["messages"],
+            tokenize=False,
+        )
+    }
+
+
+ds = ds.map(preprocess)
+
+
+# Tokenize inputs.
+def tokenize(sample):
     return tokenizer(
-        text,
+        sample["text"],
         padding=False,
         max_length=MAX_SEQUENCE_LENGTH,
         truncation=True,
@@ -34,40 +47,11 @@ def process_and_tokenize(example):
     )
 
 
-ds = ds.map(process_and_tokenize, remove_columns=ds.column_names)
+ds = ds.map(tokenize, remove_columns=ds.column_names)
 
-# Configure the quantization algorithm and scheme.
-# In this case, we:
-#   * quantize the weights to fp8 with per-tensor scales
-#   * quantize the activations to fp8 with per-tensor scales
-#   * quantize the kv cache to fp8 with per-tensor scales
-recipe = """
-quant_stage:
-    quant_modifiers:
-        QuantizationModifier:
-            ignore: ["lm_head"]
-            config_groups:
-                group_0:
-                    weights:
-                        num_bits: 8
-                        type: float
-                        strategy: tensor
-                        dynamic: false
-                        symmetric: true
-                    input_activations:
-                        num_bits: 8
-                        type: float
-                        strategy: tensor
-                        dynamic: false
-                        symmetric: true
-                    targets: ["Linear"]
-            kv_cache_scheme:
-                num_bits: 8
-                type: float
-                strategy: tensor
-                dynamic: false
-                symmetric: true
-"""
+# Configure the quantization algorithm to run.
+#   * quantize the weights to 4 bit with GPTQ with a group size 32
+recipe = GPTQModifier(targets="Linear", scheme="MXFP4A16", ignore=["lm_head"])
 
 # Apply algorithms.
 oneshot(
@@ -89,6 +73,6 @@ print(tokenizer.decode(output[0]))
 print("==========================================\n\n")
 
 # Save to disk compressed.
-SAVE_DIR = MODEL_ID.rstrip("/").split("/")[-1] + "-FP8-KV"
+SAVE_DIR = model_id.rstrip("/").split("/")[-1] + "-MXFP4A16-GPTQ"
 model.save_pretrained(SAVE_DIR, save_compressed=True)
 tokenizer.save_pretrained(SAVE_DIR)
