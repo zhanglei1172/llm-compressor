@@ -967,7 +967,8 @@ def post_compression_thinker_vit(model):
 
 @torch.no_grad()
 def post_compression_thinker_aut(model):
-    delattr(type(model.thinker.audio_tower.positional_embedding), "positional_embedding")
+    pass
+    # delattr(type(model.thinker.audio_tower.positional_embedding), "positional_embedding")
 
 
 @torch.no_grad()

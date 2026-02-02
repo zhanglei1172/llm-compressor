@@ -9,7 +9,7 @@ from compressed_tensors.quantization import (
 )
 from datasets import load_dataset
 from qwen_omni_utils import process_mm_info
-from transformers import AutoProcessor
+from transformers import AutoProcessor, AutoConfig
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeForConditionalGeneration,
 )
@@ -62,7 +62,7 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeThinkerForConditionalGeneration
 
 #################### configurations ####################
 # Select model and load it.
-pretrain = "ostq"
+pretrain = "origin"
 recipe = "examples/qwen3_omni_configs/text/gptq.yaml"
 # recipe = "examples/qwen3_omni_configs/text/mse_w4a8.yaml"
 flag = "gptq"
@@ -179,8 +179,12 @@ ds = ds.shuffle(seed=42)
 
 USE_AUDIO_IN_VIDEO = True
 
+config = AutoConfig.from_pretrained(
+    MODEL_ID, trust_remote_code=True
+)
+config.enable_audio_output = False
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
-    MODEL_ID, torch_dtype="auto"
+    MODEL_ID, config=config, torch_dtype="auto"
 )
 dtype = model.dtype
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
@@ -300,7 +304,7 @@ def my_init(self, ancestors, offloaded):
     device = get_execution_device(model)
     remove_hook_from_module(model.thinker.visual.pos_embed, recurse=False)
     model.thinker.visual.pos_embed.to(device)
-    self.offloaded.remove(model.thinker.visual.pos_embed)
+    # self.offloaded.remove(model.thinker.visual.pos_embed)
 
 
 _tmp_config = copy.deepcopy(model.thinker.config)

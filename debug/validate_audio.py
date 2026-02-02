@@ -24,7 +24,7 @@ from llmcompressor.utils import dispatch_for_generation, helpers
 
 # Select model and load it.
 REF_MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
-MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-quarot-sym-com-audio-trans"
+MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-origin-spinquant(aut,)-trans"
 
 ref_model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     REF_MODEL_ID, torch_dtype="auto"
@@ -208,7 +208,7 @@ with contextlib.ExitStack() as stack:
     for ret in zip(*_rets):
         rets.append(torch.cat(ret, dim=0))
 
-    model.thinker.audio_tower.cpu()
+    # model.thinker.audio_tower.cpu()
     del model
 
     for batch_idx in tqdm(range(len(dataloader))):
@@ -222,7 +222,7 @@ with contextlib.ExitStack() as stack:
     for ref_ret in zip(*_ref_rets):
         ref_rets.append(torch.cat(ref_ret, dim=0))
 
-    ref_model.thinker.audio_tower.cpu()
+    # ref_model.thinker.audio_tower.cpu()
     del ref_model
 
     for i, (ret, ref_ret) in enumerate(zip(rets, ref_rets)):
