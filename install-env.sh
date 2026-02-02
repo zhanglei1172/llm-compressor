@@ -1,4 +1,4 @@
 uv python pin 3.12.11
-uv sync --extra build --dev
-uv sync --extra build --extra compile --dev
+uv sync --dev
+uv pip install flash_attn  -i https://pypi.tuna.tsinghua.edu.cn/simple --no-build-isolation
 uv pip install -e .
