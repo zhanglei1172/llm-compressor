@@ -4,7 +4,6 @@ from compressed_tensors import (
     get_execution_device,
     update_offload_parameter,
 )
-from compressed_tensors.utils.offload import add_hook_to_module
 from torch.nn.utils.parametrize import is_parametrized, remove_parametrizations
 
 
@@ -26,15 +25,7 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
         dtype=next(module.parameters()).dtype,
     )
     rmsnorm.weight.requires_grad = module.weight.requires_grad
-    if hasattr(module, "_hf_hook"):
-        if module._hf_hook.offload:
-            original_devices = module._hf_hook.original_devices.copy()
-        add_hook_to_module(rmsnorm, module._hf_hook)
-        if rmsnorm._hf_hook.offload:
-            rmsnorm._hf_hook.original_devices = {
-                k: original_devices[k] if k in original_devices else v
-                for k, v in rmsnorm._hf_hook.original_devices.items()
-            }
+    assert not hasattr(module, "_hf_hook")
 
     exec_device = get_execution_device(module)
     with align_module_device(module, exec_device):
@@ -52,14 +43,6 @@ def replace_ln_to_rmsnorm(name: str, module: torch.nn.Module, model: torch.nn.Mo
 
     setattr(parent_module, attr_name, rmsnorm)
     update_offload_parameter(rmsnorm, "weight", weight)
-    if hasattr(module, "_hf_hook"):
-        if (
-            f"{rmsnorm._hf_hook.weights_map.prefix}bias"
-            in rmsnorm._hf_hook.weights_map.dataset.state_dict
-        ):
-            del rmsnorm._hf_hook.weights_map.dataset.state_dict[
-                f"{rmsnorm._hf_hook.weights_map.prefix}bias"
-            ]
 
 
 @torch.no_grad()

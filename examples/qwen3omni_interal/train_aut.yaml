@@ -7,7 +7,7 @@ train_args:
     accelerator_config:
         dispatch_batches: False
     special:
-        teacher_path: /dataset/workspace/zhangl98/models/Qwen3-Omni-Thinking/
+        teacher_path: /dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/
         loss_type: mse # kl_top origin
         opt_type: RAdam
         rotate_lr: 0.1361639079805877
@@ -16,7 +16,7 @@ train_args:
         smooth_momentum: 0.9
         # teacher_path: 
     # num_train_epochs: 1
-    max_steps: 150
+    max_steps: 10
     save_strategy: 'no'
     seed: 42
     fp16: False

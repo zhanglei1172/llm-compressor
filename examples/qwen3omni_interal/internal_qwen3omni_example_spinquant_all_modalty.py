@@ -160,12 +160,12 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 
 #################### configurations ####################
 # Select model and load it.
-pretrain = "ostq"
+pretrain = "origin"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
 enable_modality = {
-    # "vit",
-    "aut",
+    "vit",
+    # "aut",
     # "text"
 }
 model_dtype = torch.bfloat16
@@ -175,8 +175,8 @@ model_dtype = torch.bfloat16
 if pretrain == "ostq":
     MODEL_ID = "/tmp/qwen3omni_hf_v3_01000-liuding-origin-spinquant(vit,)-trans-ostq-spinquant(text,)-trans"
 else:
-    # MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-Thinking/"
-    MODEL_ID = "/dataset/workspace/liuding/workspace/Qwen3-Omni-Talker-sft/hf_model/qwen3omni_hf_v3_01000-liuding/"
+    MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
+    # MODEL_ID = "/dataset/workspace/liuding/workspace/Qwen3-Omni-Talker-sft/hf_model/qwen3omni_hf_v3_01000-liuding/"
 
 flag += str(tuple(enable_modality)).replace("'", "")
 
@@ -438,9 +438,6 @@ def pre_compression_thinker_aut(model):
     from llmcompressor.modeling.qwen3_omni_moe import replace_audio_embedding
 
     replace_audio_embedding(model.thinker.audio_tower)
-    model.thinker.audio_tower.positional_embedding.positional_embedding = (
-        model.thinker.audio_tower.positional_embedding.weight
-    )
     # session = active_session()
     # session.reset()
     state = State()
@@ -472,7 +469,8 @@ def pre_compression_thinker_aut(model):
         # for param in model.thinker.audio_tower.parameters():
         #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
-
+    weight_attr = getattr(type(model.thinker.audio_tower.positional_embedding), "weight")
+    setattr(type(model.thinker.audio_tower.positional_embedding), "positional_embedding", weight_attr)
     return state, recipe_, model
 
 
@@ -969,7 +967,7 @@ def post_compression_thinker_vit(model):
 
 @torch.no_grad()
 def post_compression_thinker_aut(model):
-    delattr(model.thinker.audio_tower.positional_embedding, "positional_embedding")
+    delattr(type(model.thinker.audio_tower.positional_embedding), "positional_embedding")
 
 
 @torch.no_grad()
