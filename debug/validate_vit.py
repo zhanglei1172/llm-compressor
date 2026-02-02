@@ -150,7 +150,7 @@ with torch.no_grad():
     for ret in zip(*_rets):
         rets.append(torch.cat(ret, dim=0))
 
-    model.thinker.visual.cpu()
+    # model.thinker.visual.cpu()
     del model
 
     for batch_idx in tqdm(range(len(dataloader))):
@@ -164,7 +164,7 @@ with torch.no_grad():
     for ref_ret in zip(*_ref_rets):
         ref_rets.append(torch.cat(ref_ret, dim=0))
 
-    ref_model.thinker.visual.cpu()
+    # ref_model.thinker.visual.cpu()
     del ref_model
 
     for i, (ret, ref_ret) in enumerate(zip(rets, ref_rets)):
