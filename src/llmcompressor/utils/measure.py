@@ -1,10 +1,31 @@
 import math
 from functools import partial
-from typing import Dict
+from typing import Dict, List
 
 import torch
 from numpy import dot, ndarray
 from numpy.linalg import norm
+
+# Supported measurement methods
+SUPPORTED_METHODS: List[str] = ["cosine", "mse", "snr", "sqnr", "kl"]
+
+# Display names for each method
+METHOD_DISPLAY_NAMES: Dict[str, str] = {
+    "cosine": "COSINE SIMILARITY",
+    "mse": "MSE LOSS(UNSCALED)",
+    "snr": "NOISE:SIGNAL POWER RATIO",
+    "sqnr": "SIGNAL:QUANTIZATION NOISE RATIO (dB)",
+    "kl": "KL DIVERGENCE",
+}
+
+# Whether to display as percentage for each method
+METHOD_USE_PERCENTAGE: Dict[str, bool] = {
+    "cosine": True,
+    "mse": False,
+    "snr": True,
+    "sqnr": False,
+    "kl": False,
+}
 
 
 def torch_cosine_similarity(

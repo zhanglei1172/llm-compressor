@@ -1,9 +1,42 @@
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Union
 
 import torch
 from tqdm import tqdm
 
-from ..measure import MeasurePrinter, MeasureRecorder
+from ..measure import (
+    METHOD_DISPLAY_NAMES,
+    METHOD_USE_PERCENTAGE,
+    SUPPORTED_METHODS,
+    MeasurePrinter,
+    MeasureRecorder,
+)
+
+
+def _normalize_methods(method: Union[str, List[str], None]) -> List[str]:
+    """Normalize method parameter to a list of methods.
+
+    Args:
+        method: A single method string, list of methods, or None for all methods.
+
+    Returns:
+        List of method strings.
+
+    Raises:
+        ValueError: If an unsupported method is provided.
+    """
+    if method is None:
+        return SUPPORTED_METHODS.copy()
+    if isinstance(method, str):
+        methods = [method]
+    else:
+        methods = list(method)
+
+    for m in methods:
+        if m not in SUPPORTED_METHODS:
+            raise ValueError(
+                f"Unsupported method '{m}'. Supported methods: {SUPPORTED_METHODS}"
+            )
+    return methods
 
 
 def generate_indexer(
@@ -103,11 +136,33 @@ class OutputRecorder:
 def graphwise_error_analyse(
     model: torch.nn.Module,
     dataloader: Iterable,
-    method: str = "snr",
+    method: Union[str, List[str], None] = "snr",
     steps: int = 8,
     verbose: bool = True,
     fetchs: int = 4096,
-) -> Dict[str, tuple]:
+) -> Union[Dict[str, float], Dict[str, Dict[str, float]]]:
+    """Analyze quantization error at graph level.
+
+    Args:
+        model: The model to analyze.
+        dataloader: DataLoader providing input batches.
+        method: Measurement method(s). Can be:
+            - A single method string (e.g., "snr", "cosine", "mse", "sqnr", "kl")
+            - A list of methods (e.g., ["snr", "cosine"])
+            - None to use all supported methods
+        steps: Number of batches to analyze.
+        verbose: Whether to print results.
+        fetchs: Number of elements to fetch per batch for comparison.
+
+    Returns:
+        If method is a single string: Dict[str, float] mapping layer names to values.
+        If method is a list or None: Dict[str, Dict[str, float]] mapping layer names
+            to dicts of {method: value}.
+    """
+    # Determine if single method mode (for backward compatibility)
+    single_method_mode = isinstance(method, str)
+    methods = _normalize_methods(method)
+
     # find all quantable operations.
     interested_op: List[Tuple[str, torch.nn.Module]] = []
     for name, operation in model.named_modules():
@@ -119,10 +174,13 @@ def graphwise_error_analyse(
         return {}
 
     # set up all hooks.
-    recorders, hooks, caches = {}, {}, {}
+    # recorders[name][method] = MeasureRecorder
+    recorders: Dict[str, Dict[str, MeasureRecorder]] = {}
+    hooks: Dict[str, OutputRecorder] = {}
+    caches: Dict[str, List] = {}
     for name, operation in interested_op:
         if hasattr(operation, "quantization_status"):
-            recorders[name] = MeasureRecorder(measurement=method)
+            recorders[name] = {m: MeasureRecorder(measurement=m) for m in methods}
             hooks[name] = OutputRecorder(operation=operation, fetchs=fetchs)
             caches[name] = []
 
@@ -162,33 +220,56 @@ def graphwise_error_analyse(
         model(batch)
 
         for name, operation in interested_op:
-            recorder = recorders[name]
             hook = hooks[name]
             cache = caches[name]
-            recorder.update(y_real=cache[idx], y_pred=hook.pop())
+            y_real = cache[idx]
+            y_pred = hook.pop()
+            # Update all method recorders
+            for m in methods:
+                recorders[name][m].update(y_real=y_real, y_pred=y_pred)
 
         if idx >= steps:
             break
 
-    results = {}
-    for name, operation in interested_op:
-        results[name] = recorders[name].measure
-        hooks[name].clear()
+    # Collect results and clean up hooks
+    if single_method_mode:
+        # Backward compatible: return Dict[str, float]
+        results: Dict[str, float] = {}
+        for name, operation in interested_op:
+            results[name] = recorders[name][methods[0]].measure
+            hooks[name].clear()
+    else:
+        # Multi-method mode: return Dict[str, Dict[str, float]]
+        results: Dict[str, Dict[str, float]] = {}
+        for name, operation in interested_op:
+            results[name] = {m: recorders[name][m].measure for m in methods}
+            hooks[name].clear()
 
     if verbose:
-        method_str = "MEASUREMENT"
-        if method == "snr": # lower is better
-            method_str = "NOISE:SIGNAL POWER RATIO"
-        if method == "sqnr": # higher is better
-            method_str = "Signal-to-Quantization-Noise Ratio in dB."
-        if method == "cosine": # higher is better
-            method_str = "COSINE SIMILARITY"
-        if method == "mse": # lower is better
-            method_str = "MSE LOSS(UNSCALED)"
-        MeasurePrinter(
-            results,
-            order="large_to_small",
-            measure=method_str,
-            percentage=method in {"snr", "cosine"},
-        ).print()
+        if single_method_mode:
+            # Single method: print once
+            m = methods[0]
+            method_str = METHOD_DISPLAY_NAMES.get(m, "MEASUREMENT")
+            MeasurePrinter(
+                results,
+                order="large_to_small",
+                measure=method_str,
+                percentage=METHOD_USE_PERCENTAGE.get(m, False),
+            ).print()
+        else:
+            # Multi-method: print for each method
+            for m in methods:
+                method_str = METHOD_DISPLAY_NAMES.get(m, "MEASUREMENT")
+                # Extract single-method results for printing
+                single_results = {name: vals[m] for name, vals in results.items()}
+                print(f"\n{'='*60}")
+                print(f"Method: {m.upper()}")
+                print(f"{'='*60}")
+                MeasurePrinter(
+                    single_results,
+                    order="large_to_small",
+                    measure=method_str,
+                    percentage=METHOD_USE_PERCENTAGE.get(m, False),
+                ).print()
+
     return results

@@ -500,14 +500,14 @@ if __name__ == "__main__":
         results = graphwise_error_analyse(
             model,  # TODO
             dataloader,
-            method="cosine",
+            method=None,
             steps=8,
             verbose=True,
         )
         results = layerwise_error_analyse(
             model,
             dataloader,
-            method="sqnr",
-            steps=8,
+            method=None,
+            steps=2,
             verbose=True,
         )
