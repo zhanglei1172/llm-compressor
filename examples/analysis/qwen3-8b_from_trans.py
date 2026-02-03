@@ -309,7 +309,8 @@ def pre_compression(model):
                         "dynamic": False,
                     },
                     "targets": [
-                        r"re:.*down_proj$",
+                        # r"re:.*down_proj$",
+                        r"re:.*.layers\.(6)\.mlp\.down_proj$",
                     ],
                 },
             },
@@ -497,17 +498,38 @@ if __name__ == "__main__":
 
         module.forward = forward.__get__(module, type(module))
 
-        results = graphwise_error_analyse(
-            model,  # TODO
-            dataloader,
-            method=None,
-            steps=8,
-            verbose=True,
-        )
-        results = layerwise_error_analyse(
-            model,
-            dataloader,
-            method=None,
-            steps=2,
-            verbose=True,
-        )
+        # results = graphwise_error_analyse(
+        #     model,  # TODO
+        #     dataloader,
+        #     method=None,
+        #     steps=8,
+        #     verbose=True,
+        # )
+        raw_scale = model.model.layers[6].mlp.down_proj.input_scale.clone().detach()
+        plot_y = []
+        muls = np.logspace(-2, 0, num=30)
+        for mul in muls:
+            print(f"==== Scaling down_proj by {mul} ====")
+            model.model.layers[6].mlp.down_proj.input_scale.copy_(
+                raw_scale * mul
+            )
+            results = layerwise_error_analyse(
+                model,
+                dataloader,
+                method=None,
+                steps=2,
+                verbose=True,
+            )
+            plot_y.append(results["model.layers.6.mlp.down_proj"]["cosine"])
+        # plot mul and result relation
+        import matplotlib.pyplot as plt
+        
+        plt.figure()
+        plt.plot(muls, plot_y, marker='o')
+        plt.xscale('log')
+        plt.xlabel('Scale Multiplier (log scale)')
+        plt.ylabel('Cosine Similarity Error')
+        plt.title('Effect of Scaling down_proj Input Scale on Cosine Similarity Error')
+        plt.grid(True)
+        plt.savefig('scaling_down_proj_effect.png')
+        # plt.show()
