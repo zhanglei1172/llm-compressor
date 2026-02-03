@@ -57,22 +57,22 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeVisionEncoder"] = [
 ]
 
 #################### configurations ####################
-recipe = "examples/qwen3_omni_configs/vit/mse_w8a8.yaml"
+recipe = "examples/qwen3_omni_configs/vit/quarot.yaml"
 # recipe = "examples/qwen3_omni_configs/vit/awq.yaml"
-flag = "mse_w8a8"
+flag = "quarot"
 # flag = "awq"
 fq = False
-realq = True
+realq = False
 #################### configurations ####################
 
 # Select model and load it.
-MODEL_ID = "/tmp/Qwen3-Omni-30B-A3B-Instruct-quarot-sym-com-vit-trans/"
+MODEL_ID = "/dataset/workspace/zhangl98/models/Qwen3-Omni-30B-A3B-Instruct/"
 
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype="auto"
 )
 dtype = model.dtype
-replace_rmsnorm(model.thinker.visual)
+# replace_rmsnorm(model.thinker.visual)
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 
@@ -164,7 +164,7 @@ def my_init(self, ancestors, offloaded):
     device = "cuda"  # get_execution_device(model)
     remove_hook_from_module(model.thinker.visual.pos_embed, recurse=False)
     model.thinker.visual.pos_embed.to(device)
-    self.offloaded.remove(model.thinker.visual.pos_embed)
+    # self.offloaded.remove(model.thinker.visual.pos_embed)
 
 
 with contextlib.ExitStack() as stack:
@@ -227,7 +227,7 @@ for module, child_name in to_removes:
 # Confirm generations of the quantized model look sane.
 print("\n\n")
 print("========== SAMPLE GENERATION ==============")
-dispatch_for_generation(model)
+# dispatch_for_generation(model)
 messages = [
     {
         "role": "user",
