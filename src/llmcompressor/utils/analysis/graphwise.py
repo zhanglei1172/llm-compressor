@@ -177,11 +177,13 @@ def graphwise_error_analyse(
 
     if verbose:
         method_str = "MEASUREMENT"
-        if method == "snr":
+        if method == "snr": # lower is better
             method_str = "NOISE:SIGNAL POWER RATIO"
-        if method == "cosine":
+        if method == "sqnr": # higher is better
+            method_str = "Signal-to-Quantization-Noise Ratio in dB."
+        if method == "cosine": # higher is better
             method_str = "COSINE SIMILARITY"
-        if method == "mse":
+        if method == "mse": # lower is better
             method_str = "MSE LOSS(UNSCALED)"
         MeasurePrinter(
             results,
