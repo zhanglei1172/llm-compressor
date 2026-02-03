@@ -13,7 +13,7 @@ import torch.distributed as dist
 import yaml
 from accelerate import init_empty_weights
 from accelerate.hooks import remove_hook_from_module
-from compressed_tensors import get_execution_device
+from compressed_tensors import get_execution_device, match_modules_set
 from compressed_tensors.quantization import (
     enable_quantization,
 )
@@ -160,6 +160,7 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeAudioEncoder"] = [
 
 #################### configurations ####################
 # Select model and load it.
+ENABLE_SMOOTH = True
 pretrain = "origin"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
@@ -328,6 +329,7 @@ def format_as_text_messages(example, prompt: str | None = None):
     ]
     return {"messages": conversations}
 
+
 def format_chat_as_messages(example):
     """Format single example into messages format for TRL."""
     # example["image"] is PIL image, convert it to base64
@@ -469,8 +471,14 @@ def pre_compression_thinker_aut(model):
         # for param in model.thinker.audio_tower.parameters():
         #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
-    weight_attr = getattr(type(model.thinker.audio_tower.positional_embedding), "weight")
-    setattr(type(model.thinker.audio_tower.positional_embedding), "positional_embedding", weight_attr)
+    weight_attr = getattr(
+        type(model.thinker.audio_tower.positional_embedding), "weight"
+    )
+    setattr(
+        type(model.thinker.audio_tower.positional_embedding),
+        "positional_embedding",
+        weight_attr,
+    )
     return state, recipe_, model
 
 
@@ -502,6 +510,68 @@ def pre_compression_thinker_text(model):
         # for param in model.thinker.model.parameters():
         #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
+
+    class SmoothTransform(torch.nn.Module):
+        def __init__(self, dim, trans=False):
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.ones(dim) * 1.0)
+            self.trans = trans
+
+        def forward(self, x, inverse=False):
+            if inverse:
+                scale = 1 / self.scale.to(x.device)
+            else:
+                scale = self.scale.to(x.device)
+            if not self.trans and x.dim() > 1:
+                scale = scale.view(-1, 1)
+            return (x.to(self.scale.dtype) * scale).to(x.dtype)
+
+        def right_inverse(self, x):
+            return self.forward(x, inverse=True)
+
+    if ENABLE_SMOOTH:
+        import torch.nn.utils.parametrize as P
+        from compressed_tensors.utils import (
+            align_module_device,
+            update_offload_parameter,
+        )
+        from torch.nn.utils.parametrize import is_parametrized
+
+        for up_projs, down_projs in match_modules_set(
+            model, (r"re:.*up_proj$", r"re:.*down_proj$")
+        ):
+            assert len(up_projs) == 1
+            assert len(down_projs) == 1
+            up_proj = up_projs[0]
+            down_proj = down_projs[0]
+            transform = SmoothTransform(up_proj.out_features).to(
+                torch.cuda.current_device()
+            )
+            transform_inv = SmoothTransform(down_proj.in_features, trans=True).to(
+                torch.cuda.current_device()
+            )
+            transform_inv.scale = transform.scale
+            with (
+                torch.no_grad(),
+                align_module_device(up_proj),
+                align_module_device(down_proj),
+            ):
+                if not is_parametrized(up_proj, "weight"):
+                    update_offload_parameter(
+                        up_proj, "weight", transform(up_proj.weight)
+                    )
+                P.register_parametrization(up_proj, "weight", transform)
+                if hasattr(up_proj, "bias") and up_proj.bias is not None:
+                    if not is_parametrized(up_proj, "bias"):
+                        update_offload_parameter(
+                            up_proj, "bias", transform(up_proj.bias)
+                        )
+                    P.register_parametrization(up_proj, "bias", transform)
+                if not is_parametrized(down_proj, "weight"):
+                    update_offload_parameter(
+                        down_proj, "weight", transform_inv(down_proj.weight)
+                    )
+                P.register_parametrization(down_proj, "weight", transform_inv)
 
     return state, recipe_, model
 
