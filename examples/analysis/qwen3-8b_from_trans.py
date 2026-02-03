@@ -505,7 +505,7 @@ if __name__ == "__main__":
             verbose=True,
         )
         results = layerwise_error_analyse(
-            model.thinker,
+            model,
             dataloader,
             method="sqnr",
             steps=8,
