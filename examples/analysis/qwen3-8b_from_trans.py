@@ -34,7 +34,10 @@ from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.modifiers.transform import SpinQuantModifier
 from llmcompressor.utils import dispatch_for_generation
 from llmcompressor.utils.analysis.graphwise import graphwise_error_analyse
-from llmcompressor.utils.analysis.layerwise import layerwise_error_analyse
+from llmcompressor.utils.analysis.layerwise import (
+    layerwise_error_analyse,
+    layerwise_qdq_error_analyse,
+)
 from llmcompressor.utils.pytorch.module import (
     patch_module_non_persistent_buffers,
 )
@@ -309,8 +312,8 @@ def pre_compression(model):
                         "dynamic": False,
                     },
                     "targets": [
-                        # r"re:.*down_proj$",
-                        r"re:.*.layers\.(6)\.mlp\.down_proj$",
+                        r"re:.*down_proj$",
+                        # r"re:.*.layers\.(6)\.mlp\.down_proj$",
                     ],
                 },
             },
@@ -324,7 +327,7 @@ def pre_compression(model):
         # for param in model.thinker.model.parameters():
         #     param.requires_grad = False
         recipe_[0].on_start(state=state, event=None)
-        recipe_[0]._fold_transforms_into_weights(state.model) # TODO
+        recipe_[0]._fold_transforms_into_weights(state.model)  # TODO
         model.apply(enable_quantization)
 
     return state, recipe_, model
@@ -395,7 +398,6 @@ def load_scale(quant_model, sclae_hf_path, config_json_str=None):
                 )
                 for key in state_dict.keys():
                     yield key, state_dict[key]
-
 
     safetensor_files = list(glob(os.path.join(sclae_hf_path, "*.safetensors")))
     safetensor_files.sort()
@@ -481,9 +483,9 @@ if __name__ == "__main__":
 
         dispatch_for_generation(model)
 
-        input_ids = train_processor("Hello my name is", return_tensors="pt").input_ids.to(
-            model.device
-        )
+        input_ids = train_processor(
+            "Hello my name is", return_tensors="pt"
+        ).input_ids.to(model.device)
         output = model.generate(input_ids, max_new_tokens=100)
         print(train_processor.decode(output[0]))
 
@@ -505,31 +507,36 @@ if __name__ == "__main__":
         #     steps=8,
         #     verbose=True,
         # )
-        raw_scale = model.model.layers[6].mlp.down_proj.input_scale.clone().detach()
-        plot_y = []
-        muls = np.logspace(-2, 0, num=30)
-        for mul in muls:
-            print(f"==== Scaling down_proj by {mul} ====")
-            model.model.layers[6].mlp.down_proj.input_scale.copy_(
-                raw_scale * mul
-            )
-            results = layerwise_error_analyse(
-                model,
-                dataloader,
-                method=None,
-                steps=2,
-                verbose=True,
-            )
-            plot_y.append(results["model.layers.6.mlp.down_proj"]["cosine"])
-        # plot mul and result relation
-        import matplotlib.pyplot as plt
-        
-        plt.figure()
-        plt.plot(muls, plot_y, marker='o')
-        plt.xscale('log')
-        plt.xlabel('Scale Multiplier (log scale)')
-        plt.ylabel('Cosine Similarity Error')
-        plt.title('Effect of Scaling down_proj Input Scale on Cosine Similarity Error')
-        plt.grid(True)
-        plt.savefig('scaling_down_proj_effect.png')
+        results = layerwise_qdq_error_analyse(
+            model,
+            dataloader,
+            method=None,
+            steps=8,
+            verbose=True,
+        )
+        # raw_scale = model.model.layers[6].mlp.down_proj.input_scale.clone().detach()
+        # plot_y = []
+        # muls = np.logspace(-2, 0, num=30)
+        # for mul in muls:
+        #     print(f"==== Scaling down_proj by {mul} ====")
+        #     model.model.layers[6].mlp.down_proj.input_scale.copy_(raw_scale * mul)
+        #     results = layerwise_error_analyse(
+        #         model,
+        #         dataloader,
+        #         method=None,
+        #         steps=2,
+        #         verbose=True,
+        #     )
+        #     plot_y.append(results["model.layers.6.mlp.down_proj"]["cosine"])
+        # # plot mul and result relation
+        # import matplotlib.pyplot as plt
+
+        # plt.figure()
+        # plt.plot(muls, plot_y, marker="o")
+        # plt.xscale("log")
+        # plt.xlabel("Scale Multiplier (log scale)")
+        # plt.ylabel("Cosine Similarity Error")
+        # plt.title("Effect of Scaling down_proj Input Scale on Cosine Similarity Error")
+        # plt.grid(True)
+        # plt.savefig("scaling_down_proj_effect.png")
         # plt.show()
