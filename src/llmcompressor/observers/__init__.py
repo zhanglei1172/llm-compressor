@@ -16,3 +16,4 @@ from .min_max import *
 from .mse import *
 from .percentile import *
 from .kl import *
+from .lct import *
