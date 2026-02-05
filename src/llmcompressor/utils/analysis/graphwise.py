@@ -111,9 +111,9 @@ class OutputRecorder:
     def register_post_forward_hook(self) -> List:
         def post_forward_hook(module, args, output):
             output_tensor = output
-            assert isinstance(
-                output_tensor, torch.Tensor
-            ), "Output of monitoring operation is not a torch.Tensor"
+            assert isinstance(output_tensor, torch.Tensor), (
+                "Output of monitoring operation is not a torch.Tensor"
+            )
             self.fetched = batch_random_fetch(
                 output_tensor, seed=10086, fetches_per_batch=self.fetchs
             ).to("cpu")
@@ -262,9 +262,115 @@ def graphwise_error_analyse(
                 method_str = METHOD_DISPLAY_NAMES.get(m, "MEASUREMENT")
                 # Extract single-method results for printing
                 single_results = {name: vals[m] for name, vals in results.items()}
-                print(f"\n{'='*60}")
+                print(f"\n{'=' * 60}")
                 print(f"Method: {m.upper()}")
-                print(f"{'='*60}")
+                print(f"{'=' * 60}")
+                MeasurePrinter(
+                    single_results,
+                    order="large_to_small",
+                    measure=method_str,
+                    percentage=METHOD_USE_PERCENTAGE.get(m, False),
+                ).print()
+
+    return results
+
+
+@torch.no_grad()
+def graph_error_analyse(
+    model: torch.nn.Module,
+    dataloader: Iterable,
+    method: Union[str, List[str], None] = "snr",
+    steps: int = 8,
+    verbose: bool = True,
+) -> Union[Dict[str, float], Dict[str, Dict[str, float]]]:
+    """Analyze quantization error at graph level.
+
+    Args:
+        model: The model to analyze.
+        dataloader: DataLoader providing input batches.
+        method: Measurement method(s). Can be:
+            - A single method string (e.g., "snr", "cosine", "mse", "sqnr", "kl")
+            - A list of methods (e.g., ["snr", "cosine"])
+            - None to use all supported methods
+        steps: Number of batches to analyze.
+        verbose: Whether to print results.
+
+    Returns:
+        If method is a single string: Dict[str, float] mapping graph names to values.
+        If method is a list or None: Dict[str, Dict[str, float]] mapping graph names
+            to dicts of {method: value}.
+    """
+    # Determine if single method mode (for backward compatibility)
+    single_method_mode = isinstance(method, str)
+    methods = _normalize_methods(method)
+
+    # find all quantable operations.
+    quantable_operations: List[Tuple[str, torch.nn.Module]] = []
+    for name, operation in model.named_modules():
+        if hasattr(operation, "quantization_status") and getattr(
+            operation, "quantization_enabled", True
+        ):
+            quantable_operations.append((name, operation))
+
+    recorders = {m: MeasureRecorder(measurement=m) for m in methods}
+
+    for idx, batch in tqdm(
+        enumerate(dataloader),
+        desc="Analysing Graph Overall quantization error:",
+        total=min(len(dataloader), steps),
+    ):
+        # manually override quantization state
+        for name, operation in quantable_operations:
+            operation.quantization_enabled = False
+        fp_outputs = model(batch)
+
+        for name, operation in quantable_operations:
+            operation.quantization_enabled = True
+        qt_outputs = model(batch)
+
+        # Update all method recorders
+        for m in methods:
+            recorders[m].update(y_pred=qt_outputs, y_real=fp_outputs)
+
+        if idx >= steps:
+            break
+
+    # restore quantization states
+    for name, operation in model.named_modules():
+        if hasattr(operation, "quantization_status"):
+            operation.quantization_enabled = True
+
+    name = "graph_error"
+    # Collect results
+    if single_method_mode:
+        # Backward compatible: return Dict[str, float]
+        results: Dict[str, float] = {}
+        results[name] = recorders[methods[0]].measure
+    else:
+        # Multi-method mode: return Dict[str, Dict[str, float]]
+        results: Dict[str, Dict[str, float]] = {}
+        results[name] = {m: recorders[m].measure for m in methods}
+
+    if verbose:
+        if single_method_mode:
+            # Single method: print once
+            m = methods[0]
+            method_str = METHOD_DISPLAY_NAMES.get(m, "MEASUREMENT")
+            MeasurePrinter(
+                results,
+                order="large_to_small",
+                measure=method_str,
+                percentage=METHOD_USE_PERCENTAGE.get(m, False),
+            ).print()
+        else:
+            # Multi-method: print for each method
+            for m in methods:
+                method_str = METHOD_DISPLAY_NAMES.get(m, "MEASUREMENT")
+                # Extract single-method results for printing
+                single_results = {name: vals[m] for name, vals in results.items()}
+                print(f"\n{'=' * 60}")
+                print(f"Method: {m.upper()}")
+                print(f"{'=' * 60}")
                 MeasurePrinter(
                     single_results,
                     order="large_to_small",

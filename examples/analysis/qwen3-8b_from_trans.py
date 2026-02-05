@@ -33,7 +33,10 @@ from llmcompressor.core.state import State
 from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.modifiers.transform import SpinQuantModifier
 from llmcompressor.utils import dispatch_for_generation
-from llmcompressor.utils.analysis.graphwise import graphwise_error_analyse
+from llmcompressor.utils.analysis.graphwise import (
+    graph_error_analyse,
+    graphwise_error_analyse,
+)
 from llmcompressor.utils.analysis.layerwise import (
     layerwise_error_analyse,
     layerwise_qdq_error_analyse,
@@ -282,26 +285,26 @@ def pre_compression(model):
         QuantizationModifier(
             ignore=ignore,
             config_groups={
-                # "group_0": {
-                #     "input_activations": {
-                #         "observer": "minmax",
-                #         "num_bits": 8,
-                #         "type": "int",
-                #         "symmetric": True,
-                #         "strategy": "tensor",
-                #         "dynamic": False,
-                #     },
-                #     "targets": [
-                #         r"re:.*up_proj$",
-                #         r"re:.*gate_proj$",
-                #         r"re:.*q_proj$",
-                #         r"re:.*k_proj$",
-                #         r"re:.*v_proj$",
-                #         r"re:.*o_proj$",
-                #         r"re:.*out_proj$",
-                #         r"re:.*attn\.proj$",
-                #     ],
-                # },
+                "group_0": {
+                    "input_activations": {
+                        "observer": "minmax",
+                        "num_bits": 8,
+                        "type": "int",
+                        "symmetric": True,
+                        "strategy": "tensor",
+                        "dynamic": False,
+                    },
+                    "targets": [
+                        r"re:.*up_proj$",
+                        r"re:.*gate_proj$",
+                        r"re:.*q_proj$",
+                        r"re:.*k_proj$",
+                        r"re:.*v_proj$",
+                        r"re:.*o_proj$",
+                        r"re:.*out_proj$",
+                        r"re:.*attn\.proj$",
+                    ],
+                },
                 "group_1": {
                     "input_activations": {
                         "observer": "minmax",
@@ -500,6 +503,29 @@ if __name__ == "__main__":
 
         module.forward = forward.__get__(module, type(module))
 
+        # results = graph_error_analyse( # overall graph error
+        #     model,
+        #     dataloader,
+        #     method=None,
+        #     steps=8,
+        #     verbose=True,
+        # )
+        from compressed_tensors.utils.match import match_named_modules
+        for name, module in match_named_modules(
+            model,
+            [r"re:.*.layers\.(6|16)\.mlp\.down_proj$"],
+            warn_on_fail=True,
+        ):
+            print(f"Disabling quantization for {name}")
+            module.quantization_enabled = False  # disable gate quantization
+        results = graph_error_analyse( # overall graph error
+            model,
+            dataloader,
+            method=None,
+            steps=8,
+            verbose=True,
+        )
+
         # results = graphwise_error_analyse(
         #     model,  # TODO
         #     dataloader,
@@ -507,13 +533,20 @@ if __name__ == "__main__":
         #     steps=8,
         #     verbose=True,
         # )
-        results = layerwise_qdq_error_analyse(
+        results = layerwise_error_analyse(
             model,
             dataloader,
             method=None,
-            steps=8,
+            steps=1,
             verbose=True,
         )
+        # results = layerwise_qdq_error_analyse(
+        #     model,
+        #     dataloader,
+        #     method=None,
+        #     steps=8,
+        #     verbose=True,
+        # )
         # raw_scale = model.model.layers[6].mlp.down_proj.input_scale.clone().detach()
         # plot_y = []
         # muls = np.logspace(-2, 0, num=30)
