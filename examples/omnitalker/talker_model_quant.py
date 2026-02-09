@@ -45,7 +45,7 @@ flag = "gptq"
 fq = True  # False
 realq = False
 NUM_CALIBRATION_SAMPLES = 1 if flag == "quarot" else 100
-bs = 1 if flag == "quarot" else 1
+bs = 1 if flag == "quarot" else 20
 
 dtype = torch.float32
 
@@ -181,8 +181,8 @@ class DataCollatorWithPadding:
         for feature in features:
             for key in feature.keys():
                 batch[key].append(feature[key])
-
-        for key in batch.keys():
+        keys = set(batch.keys())
+        for key in keys:
             # process padding features
             if key in [
                 "inputs_embeds",
@@ -197,17 +197,24 @@ class DataCollatorWithPadding:
                     padding_side="left",
                 )
                 if key == "inputs_embeds":
+                    mask = [torch.ones(len(x[0]), dtype=torch.long) for x in batch[key]]
                     batch[key] = s.to(dtype)
+                    batch["attention_mask"] = pad_sequence(
+                        mask,
+                        batch_first=True,
+                        padding_value=0,
+                        padding_side="left",
+                    )
                 else:
                     batch[key] = s
                     
             elif key == "position_ids":
                 batch[key] = pad_sequence(
-                    [torch.tensor(x).squeeze(0) for x in batch[key]],
-                    batch_first=True,
+                    [torch.tensor(x).squeeze(1).T for x in batch[key]],
+                    batch_first=False,
                     padding_value=0,
                     padding_side="left",
-                ).squeeze(0)
+                ).transpose(0, 2)
             elif key in ["labels", "labels_image"]:
                 batch[key] = pad_sequence(
                     [torch.tensor(x).squeeze(0) for x in batch[key]],
