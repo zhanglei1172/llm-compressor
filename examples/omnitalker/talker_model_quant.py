@@ -44,8 +44,8 @@ flag = "gptq"
 # flag = "mse_w4a8"
 fq = True  # False
 realq = False
-NUM_CALIBRATION_SAMPLES = 1 if flag == "quarot" else 100
-bs = 1 if flag == "quarot" else 20
+NUM_CALIBRATION_SAMPLES = 1 if flag == "quarot" else 512
+bs = 1 if flag == "quarot" else 128
 
 dtype = torch.float32
 
@@ -56,8 +56,12 @@ dtype = torch.float32
 class CustomDataset(TextGenerationDataset):
 
     def __call__(self, add_labels: bool = True):
-        ds = torch.load("/dataset/workspace/zhangl98/qwenomni-exp-talker/all_inputs.pt")
-        ds = datasets.Dataset.from_list(ds)
+        zh_ds = torch.load("/dataset/workspace/zhangl98/qwenomni-exp-talker/zh_all_inputs.pt", map_location="cpu")
+        en_ds = torch.load("/dataset/workspace/zhangl98/qwenomni-exp-talker/en_all_inputs.pt", map_location="cpu")
+        zh_ds = datasets.Dataset.from_list(zh_ds)
+        en_ds = datasets.Dataset.from_list(en_ds)
+        ds = datasets.concatenate_datasets([zh_ds, en_ds])
+        ds = ds.shuffle(seed=42)
         return ds
 
 
