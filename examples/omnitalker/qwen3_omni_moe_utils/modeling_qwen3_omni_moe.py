@@ -3047,7 +3047,11 @@ class Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration(Qwen3OmniMoeP
         )
 
         hidden_states = outputs.last_hidden_state
-        logits = self.lm_head[generation_steps](hidden_states)
+        if hasattr(self.lm_head, "_orig_mod"):
+            lm_head = self.lm_head._orig_mod
+        else:
+            lm_head = self.lm_head
+        logits = lm_head[generation_steps](hidden_states)
 
         loss = None
         if labels is not None:
@@ -4126,6 +4130,84 @@ class Qwen3OmniMoeForConditionalGeneration(Qwen3OmniMoePreTrainedModel, Generati
     def enable_talker(self):
         self.talker = Qwen3OmniMoeTalkerForConditionalGeneration(self.config.talker_config)
 
+    def _get_talker_user_parts(
+        self, im_start_index, segment_end_index, multimodal_mask, thinker_hidden, thinker_embed
+    ):
+        user_talker_part = torch.empty(
+            (1, segment_end_index - im_start_index, self.config.talker_config.text_config.hidden_size),
+            device=self.talker.device,
+            dtype=self.talker.get_input_embeddings().weight.dtype,
+        )
+
+        user_mm_mask = multimodal_mask[:, im_start_index:segment_end_index]
+
+        # Multimodal data exists
+        if user_mm_mask.any():
+            user_thinker_hidden_mm = thinker_hidden[:, im_start_index:segment_end_index][user_mm_mask]
+            mm_hidden = self.talker.hidden_projection(user_thinker_hidden_mm).to(self.talker.device)
+            user_talker_part[user_mm_mask] = mm_hidden
+        user_thinker_embed = thinker_embed[:, im_start_index:segment_end_index][~user_mm_mask]
+        user_text_hidden = self.talker.text_projection(user_thinker_embed).to(self.talker.device)
+        user_talker_part[~user_mm_mask] = user_text_hidden
+        return user_talker_part
+
+    def _get_talker_assistant_parts(
+        self, im_start_index, segment_end_index, speaker_id, thinker_embed, tts_pad_embed, tts_bos_embed, tts_eos_embed
+    ):
+        assistant_hidden = self.talker.text_projection(thinker_embed[:, im_start_index:segment_end_index]).to(
+            self.talker.device
+        )  # [1 t d]
+        assistant_text_hidden = torch.cat(
+            (
+                assistant_hidden[:, :3],
+                tts_pad_embed.expand(-1, 4, -1),
+                tts_bos_embed,
+                assistant_hidden[:, 3:4],  # First text
+            ),
+            dim=1,
+        )
+        codec_special_tokens = torch.tensor(
+            [
+                [
+                    self.config.talker_config.codec_nothink_id,
+                    self.config.talker_config.codec_think_bos_id,
+                    self.config.talker_config.codec_think_eos_id,
+                    speaker_id,
+                    self.config.talker_config.codec_pad_id,
+                    self.config.talker_config.codec_bos_id,
+                ]
+            ],
+            device=self.talker.device,
+            dtype=torch.long,
+        )
+        assistant_codec_hidden = torch.cat(
+            (
+                torch.zeros(
+                    (1, 3, self.config.talker_config.text_config.hidden_size),
+                    device=self.talker.device,
+                    dtype=self.talker.get_input_embeddings().weight.dtype,
+                ),
+                self.talker.get_input_embeddings()(codec_special_tokens).to(self.talker.device),
+            ),
+            dim=1,
+        )
+        trailing_text_hidden = torch.cat(
+            (
+                assistant_hidden[:, 4:],
+                tts_eos_embed,
+            ),
+            dim=1,
+        )
+
+        input_embeds = assistant_text_hidden + assistant_codec_hidden
+        input_ids = torch.full(
+            (1, assistant_text_hidden.shape[1]),
+            fill_value=self.config.tts_pad_token_id,
+            dtype=torch.long,
+            device=assistant_text_hidden.device,
+        )
+        return input_embeds, input_ids, trailing_text_hidden
+
     @torch.no_grad()
     def generate(
         self,
@@ -4290,7 +4372,7 @@ class Qwen3OmniMoeForConditionalGeneration(Qwen3OmniMoePreTrainedModel, Generati
                 user_talker_part = torch.empty(
                     (1, segment_end_index - im_start_index, self.config.talker_config.hidden_size),
                     device=self.talker.device,
-                    dtype=self.talker.dtype,
+                    dtype=self.talker.get_input_embeddings().weight.dtype,
                 )
 
                 user_mm_mask = multimodal_mask[:, im_start_index:segment_end_index]
@@ -4324,7 +4406,7 @@ class Qwen3OmniMoeForConditionalGeneration(Qwen3OmniMoePreTrainedModel, Generati
                         torch.zeros(
                             (1, 3, self.config.talker_config.hidden_size),
                             device=self.talker.device,
-                            dtype=self.talker.dtype,
+                            dtype=self.talker.get_input_embeddings().weight.dtype,
                         ),
                         self.talker.get_input_embeddings()(
                             torch.tensor(
@@ -4486,7 +4568,7 @@ class Qwen3OmniMoeForConditionalGeneration(Qwen3OmniMoePreTrainedModel, Generati
                         torch.zeros(
                             (1, 3, self.config.talker_config.hidden_size),
                             device=self.talker.device,
-                            dtype=self.talker.dtype,
+                            dtype=self.talker.get_input_embeddings().weight.dtype,
                         ),
                         self.talker.get_input_embeddings()(
                             torch.tensor(

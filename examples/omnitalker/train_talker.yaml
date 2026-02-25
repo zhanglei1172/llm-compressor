@@ -1,0 +1,50 @@
+
+seq_len: 2048
+train_args:
+    remove_unused_columns: False
+    warmup_steps: 0
+    dataloader_drop_last: True
+    accelerator_config:
+        dispatch_batches: False
+    special:
+        teacher_path: /dataset/model_engine/qwen3omni_hf_v3_01000-liuding
+        loss_type: kl_top # kl_top origin
+        opt_type: RAdam
+        rotate_lr: 0.1361639079805877
+        rotate_momentum: 0.0
+        smooth_lr: 0.009812197369305694
+        smooth_momentum: 0.9
+        # teacher_path: 
+    # num_train_epochs: 1
+    max_steps: 5
+    save_strategy: 'no'
+    seed: 42
+    fp16: False
+    # bf16: True
+    bf16: False
+    log_on_each_node: False
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 1
+    logging_steps: 1
+    learning_rate: 0.1361639079805877
+    weight_decay: 0.
+    lr_scheduler_type: "cosine"
+    # gradient_checkpointing: True
+    output_dir: ./out/
+    logging_dir: ./log/
+    logging_first_step: True
+    report_to: 
+    fsdp: "full_shard auto_wrap"
+    # fsdp_transformer_layer_cls_to_wrap: "Qwen3OmniMoeThinkerTextDecoderLayer,TeacherModel"
+    # fsdp_transformer_layer_cls_to_wrap: "Qwen3OmniMoeThinkerTextDecoderLayer"
+    ddp_find_unused_parameters: True
+    fsdp_config:
+        activation_checkpointing: True
+        transformer_layer_cls_to_wrap: "Qwen3OmniMoeThinkerTextDecoderLayer,Qwen3OmniMoeThinkerForConditionalGeneration,Qwen3OmniMoeTalkerDecoderLayer,Qwen3OmniMoeTalkerModel"
+        # transformer_layer_cls_to_wrap: "Qwen3_VL_MoeDecoderLayer,TeacherModel"
+        use_orig_params: True
+        sync_module_states: True
+        cpu_ram_efficient_loading: True
+    # eval_strategy: "steps"
+    # load_best_model_at_end: True
+    # save_total_limit: 1
