@@ -595,15 +595,17 @@ class UnionFind:
             self.rank[root_x] += 1
 
 
-def build_weight_tied_map_with_unionfind(model: torch.nn.Module):
+def build_weight_tied_map_with_unionfind(model: torch.nn.Module, remove_duplicate=True):
     weight_tied_map = {}
     weight_tied_name_map = {}
     uf = UnionFind()
     param_id_to_first_name = {}
 
     # 第一遍：收集所有参数
-    for module_name, module in model.named_modules():
-        for param_name, param in module.named_parameters(recurse=False):
+    for module_name, module in model.named_modules(remove_duplicate=remove_duplicate):
+        for param_name, param in module.named_parameters(
+            recurse=False, remove_duplicate=remove_duplicate
+        ):
             if not param.requires_grad:
                 continue
 
