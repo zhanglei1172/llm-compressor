@@ -10,16 +10,23 @@ from pathlib import Path
 import librosa
 import soundfile as sf
 import torch
+from compressed_tensors.offload.dispatch import (
+    offload_model,
+)
 from compressed_tensors.transform import TransformLocation
 from compressed_tensors.transform.factory.base import TransformBase
 from compressed_tensors.transform.utils.hadamard import random_hadamard_matrix
 from compressed_tensors.transform.utils.matrix import apply_transform_weight
-from compressed_tensors.utils import remove_dispatch
+from compressed_tensors.utils import (
+    remove_dispatch,
+    update_offload_parameter,
+)
 from torch.nn.utils.parametrize import is_parametrized
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from transformers import AutoConfig, AutoFeatureExtractor, AutoProcessor, MimiModel
 
+from llmcompressor.train.fsdp_trainer import MyTrainer
 from llmcompressor.utils import dispatch_for_generation
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -81,7 +88,7 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeTalkerForConditionalGeneration"
 # Select model and load it.
 pretrain = "origin"
 flag = "dartquant"
-NUM_CALIBRATION_SAMPLES = 128
+NUM_CALIBRATION_SAMPLES = 256
 enable_modality = {"talker"}
 model_dtype = torch.bfloat16
 jsonl_path = Path("/dataset/workspace/zhangl98/dataset/talker/processed/train.jsonl")
@@ -718,9 +725,7 @@ def model_forward(model, inputs):
 
         codec_hidden_start = prefix_len - 1
         codec_hidden_end = prefix_len - 1 + num_codec_tokens
-        codec_hidden = talker_hidden[
-            :, codec_hidden_start:codec_hidden_end, :
-        ]
+        codec_hidden = talker_hidden[:, codec_hidden_start:codec_hidden_end, :]
 
         mtp_total_loss = 0.0
         code_predictor = model.talker.code_predictor
@@ -743,9 +748,7 @@ def model_forward(model, inputs):
                 embed_list.append(prev_embed_flat)
 
             mtp_inputs = torch.cat(embed_list, dim=1).to(model_dtype)
-            target_layer_codes = sample_codes[:, mtp_layer_idx + 1, :].to(
-                device
-            )
+            target_layer_codes = sample_codes[:, mtp_layer_idx + 1, :].to(device)
             target_labels = target_layer_codes.reshape(-1)
 
             mtp_outputs = code_predictor(
@@ -1013,6 +1016,10 @@ if __name__ == "__main__":
         hooks = regist_hook(model, stat_tensors, weight_tied_name_map)
         inference_model(model)
         model.cpu()
+        # offload_model(model, "cuda:0", "cpu")
+        MyTrainer.register_tied_parameters(model, weight_tied_name_map)
+        for param in model.parameters():
+            param.requires_grad = False
         torch.cuda.empty_cache()
         for h in hooks:
             h.remove()
@@ -1032,9 +1039,14 @@ if __name__ == "__main__":
                 accumulation_steps=2,
                 val_ratio=0.1,
             )
-            module.weight.data.copy_(
-                R.to(device=module.weight.device, dtype=module.weight.dtype)
+            update_offload_parameter(
+                module,
+                "weight",
+                R.to(device=module.weight.device, dtype=module.weight.dtype),
             )
+            # module.weight.data.copy_(
+            #     R.to(device=module.weight.device, dtype=module.weight.dtype)
+            # )
 
         if "talker" in enable_modality:
             recipe_[0]._fold_transforms_into_weights(state.model)

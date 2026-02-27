@@ -34,7 +34,7 @@ from llmcompressor.utils import dispatch_for_generation, helpers
 #################### configurations ####################
 # Select model and load it.
 # MODEL_ID = "/dataset/model_engine/qwen3omni_hf_v3_01000-liuding"
-MODEL_ID = "/tmp/qwen3omni_hf_v3_01000-liuding-origin-quarot-sym-com-text-trans"
+MODEL_ID = "/tmp/qwen3omni_hf_v3_01000-liuding-origin-dartquant(talker|)-trans"
 
 # recipe = "examples/omnitalker/configs/quarot.yaml"
 recipe = "examples/omnitalker/configs/gptq.yaml"
@@ -54,10 +54,15 @@ dtype = torch.float32
 
 @TextGenerationDataset.register(name="list_of_dict", alias=["lod"])
 class CustomDataset(TextGenerationDataset):
-
     def __call__(self, add_labels: bool = True):
-        zh_ds = torch.load("/dataset/workspace/zhangl98/qwenomni-exp-talker/zh_all_inputs.pt", map_location="cpu")
-        en_ds = torch.load("/dataset/workspace/zhangl98/qwenomni-exp-talker/en_all_inputs.pt", map_location="cpu")
+        zh_ds = torch.load(
+            "/dataset/workspace/zhangl98/qwenomni-exp-talker/zh_all_inputs.pt",
+            map_location="cpu",
+        )
+        en_ds = torch.load(
+            "/dataset/workspace/zhangl98/qwenomni-exp-talker/en_all_inputs.pt",
+            map_location="cpu",
+        )
         zh_ds = datasets.Dataset.from_list(zh_ds)
         en_ds = datasets.Dataset.from_list(en_ds)
         ds = datasets.concatenate_datasets([zh_ds, en_ds])
@@ -97,7 +102,9 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         # router_logits: (batch * sequence_length, n_experts)
-        router_logits = self.gate(hidden_states)
+        router_logits = self.gate(
+            hidden_states.view(batch_size, sequence_length, hidden_dim)
+        ).view(-1, self.num_experts)
 
         routing_weights = torch.nn.functional.softmax(
             router_logits, dim=1, dtype=torch.float
@@ -126,7 +133,9 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
             idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
 
             if self.calibrate_all_experts:
-                expert_out = expert_layer(hidden_states)[top_x]
+                expert_out = expert_layer(
+                    hidden_states.view(batch_size, sequence_length, hidden_dim)
+                ).view(-1, hidden_dim)[top_x]
             else:
                 expert_out = expert_layer(hidden_states[top_x])
 
@@ -137,11 +146,20 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
                     0, top_x, current_hidden_states.to(hidden_states.dtype)
                 )
 
-        shared_expert_output = self.shared_expert(hidden_states)
-        shared_expert_output = (
-            F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+        shared_expert_output = self.shared_expert(
+            hidden_states.view(batch_size, sequence_length, hidden_dim)
         )
-        final_hidden_states = final_hidden_states + shared_expert_output
+        shared_expert_output = (
+            F.sigmoid(
+                self.shared_expert_gate(
+                    hidden_states.view(batch_size, sequence_length, hidden_dim)
+                )
+            )
+            * shared_expert_output
+        )
+        final_hidden_states = final_hidden_states + shared_expert_output.view(
+            -1, hidden_dim
+        )
         final_hidden_states = final_hidden_states.reshape(
             batch_size, sequence_length, hidden_dim
         )
@@ -149,7 +167,7 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
 
     def restore(self, original: torch.nn.Module) -> torch.nn.Module:
         return original
-    
+
 
 # DATASET_ID = "lmms-lab/flickr30k"
 # DATASET_SPLIT = "test[:512]"
@@ -165,8 +183,6 @@ model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
 )
 # tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-
-
 
 
 IGNORE_INDEX = -100
@@ -211,7 +227,7 @@ class DataCollatorWithPadding:
                     )
                 else:
                     batch[key] = s
-                    
+
             elif key == "position_ids":
                 batch[key] = pad_sequence(
                     [torch.tensor(x).squeeze(1).T for x in batch[key]],
@@ -301,7 +317,7 @@ with contextlib.ExitStack() as stack:
     oneshot(
         model=model.talker.model,  # TODO
         processor=model.config._name_or_path,
-        dataset='lod',  # TODO
+        dataset="lod",  # TODO
         recipe=recipe,
         tie_word_embeddings=True,
         data_collator=data_collator,
@@ -379,7 +395,9 @@ quantized_name_set = set()
 import re
 
 for _, module in match_named_modules(
-    model.talker.model, recipe.modifiers[-1].resolved_targets, recipe.modifiers[-1].ignore
+    model.talker.model,
+    recipe.modifiers[-1].resolved_targets,
+    recipe.modifiers[-1].ignore,
 ):
     if hasattr(module, "quantization_status"):
         assert module.quantization_status == QuantizationStatus.FROZEN, (
