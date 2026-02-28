@@ -23,7 +23,7 @@ train_args:
     # bf16: True
     bf16: False
     log_on_each_node: False
-    per_device_train_batch_size: 2
+    per_device_train_batch_size: 1
     gradient_accumulation_steps: 1
     logging_steps: 1
     learning_rate: 0.1361639079805877

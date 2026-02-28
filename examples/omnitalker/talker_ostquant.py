@@ -105,7 +105,7 @@ pretrain = "origin"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
 enable_modality = {"talker"}
-model_dtype = torch.bfloat16
+model_dtype = torch.float32
 jsonl_path = Path("/dataset/workspace/zhangl98/dataset/talker/processed/train.jsonl")
 MIMI_REPO_ID = "/dataset/workspace/zhangl98/models/mimi"
 NUM_CODE_GROUPS = 16
@@ -706,11 +706,14 @@ def fsdp_main(model, config):
         model_path = train_args.special.get("teacher_path", MODEL_ID)
 
         teacher_model, _ = dist_load_model(model_path)
-        teacher_model = teacher_model.talker
+        del teacher_model.thinker.model.layers
         teacher_model.eval()
         for param in teacher_model.parameters():
             param.requires_grad = False
-        teacher_model.config.text_config.use_cache = False
+        teacher_model.talker.config.text_config.use_cache = False
+        teacher_model.thinker.config.text_config.use_cache = (
+            False  # make activation ckpt
+        )
         model_to_train.teacher = TeacherModel(teacher_model)
     # Now you can train the model
     # model_to_train.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
@@ -730,6 +733,8 @@ def fsdp_main(model, config):
     class TalkerTrainer(MyTrainer):
         @torch.compile(fullgraph=False, disable=True)
         def compute_loss(self, model, inputs, **kwargs):
+            args = self.args
+            loss_type = args.special.get("loss_type", "origin")
             device = torch.cuda.current_device()
             batch = inputs["batch"]
             target_codes = inputs["target_codes"]
@@ -753,124 +758,160 @@ def fsdp_main(model, config):
             # with FSDP.summon_full_params(model, writeback=True, recurse=False):
             for i in range(batch_size_actual):
                 # Build Talker prefix
-                (
-                    talker_input_embed,
-                    talker_input_ids,
-                    trailing_text_hidden,
-                    tts_pad_embed,
-                ) = build_talker_prefix_tts(
-                    model=model,
-                    thinker_outputs=thinker_outputs,
-                    input_ids=batch["input_ids"],
-                    speaker_name=speakers[i],
-                    device=device,
-                    batch_idx=i,
-                )
+                def prepare_talker_inputs(model, thinker_outputs):
+                    (
+                        talker_input_embed,
+                        talker_input_ids,
+                        trailing_text_hidden,
+                        tts_pad_embed,
+                    ) = build_talker_prefix_tts(
+                        model=model,
+                        thinker_outputs=thinker_outputs,
+                        input_ids=batch["input_ids"],
+                        speaker_name=speakers[i],
+                        device=device,
+                        batch_idx=i,
+                    )
 
-                # Extract this sample's codes
-                sample_codes = target_codes[i : i + 1, :, : audio_lengths[i]]
+                    # Extract this sample's codes
+                    sample_codes = target_codes[i : i + 1, :, : audio_lengths[i]]
 
-                # Prepare Talker training (Layer 0)
-                layer0_codes = sample_codes[:, 0, :]
-                num_codec_tokens = layer0_codes.shape[1]
+                    # Prepare Talker training (Layer 0)
+                    layer0_codes = sample_codes[:, 0, :]
+                    num_codec_tokens = layer0_codes.shape[1]
 
-                layer0_embeds = model.talker.get_input_embeddings()(
-                    layer0_codes.to(device)
-                )
-                predictor_embeds = (
-                    model.talker.code_predictor.get_input_embeddings()
-                )
-                if hasattr(predictor_embeds, "_orig_mod"):
-                    predictor_embeds = predictor_embeds._orig_mod
+                    layer0_embeds = model.talker.get_input_embeddings()(
+                        layer0_codes.to(device)
+                    )
+                    predictor_embeds = (
+                        model.talker.code_predictor.get_input_embeddings()
+                    )
+                    if hasattr(predictor_embeds, "_orig_mod"):
+                        predictor_embeds = predictor_embeds._orig_mod
 
-                # Sum all layer embeddings
-                all_layer_embeds_sum = layer0_embeds.clone()
-                for j in range(len(predictor_embeds)):
-                    layer_j_codes = sample_codes[:, j + 1, :]
-                    emb = predictor_embeds[j](layer_j_codes.to(device))
-                    all_layer_embeds_sum = all_layer_embeds_sum + emb
+                    # Sum all layer embeddings
+                    all_layer_embeds_sum = layer0_embeds.clone()
+                    for j in range(len(predictor_embeds)):
+                        layer_j_codes = sample_codes[:, j + 1, :]
+                        emb = predictor_embeds[j](layer_j_codes.to(device))
+                        all_layer_embeds_sum = all_layer_embeds_sum + emb
 
-                # Build shifted inputs (teacher forcing)
-                text_len = trailing_text_hidden.shape[1]
-                codec_input_embeds_list = []
+                    # Build shifted inputs (teacher forcing)
+                    text_len = trailing_text_hidden.shape[1]
+                    codec_input_embeds_list = []
 
-                for pos in range(num_codec_tokens):
-                    if pos == 0:
-                        continue
-                    prev_pos = pos - 1
-                    text_hidden = (
-                        trailing_text_hidden[:, prev_pos : prev_pos + 1, :]
-                        if prev_pos < text_len
+                    for pos in range(num_codec_tokens):
+                        if pos == 0:
+                            continue
+                        prev_pos = pos - 1
+                        text_hidden = (
+                            trailing_text_hidden[:, prev_pos : prev_pos + 1, :]
+                            if prev_pos < text_len
+                            else tts_pad_embed
+                        )
+                        pos_embed = (
+                            all_layer_embeds_sum[:, prev_pos : prev_pos + 1, :]
+                            + text_hidden
+                        )
+                        codec_input_embeds_list.append(pos_embed)
+
+                    # EOS input
+                    last_pos = num_codec_tokens - 1
+                    eos_text_hidden = (
+                        trailing_text_hidden[:, last_pos : last_pos + 1, :]
+                        if last_pos < text_len
                         else tts_pad_embed
                     )
-                    pos_embed = (
-                        all_layer_embeds_sum[:, prev_pos : prev_pos + 1, :]
-                        + text_hidden
+                    eos_input_embed = (
+                        all_layer_embeds_sum[:, last_pos : last_pos + 1, :]
+                        + eos_text_hidden
                     )
-                    codec_input_embeds_list.append(pos_embed)
+                    codec_input_embeds_list.append(eos_input_embed)
 
-                # EOS input
-                last_pos = num_codec_tokens - 1
-                eos_text_hidden = (
-                    trailing_text_hidden[:, last_pos : last_pos + 1, :]
-                    if last_pos < text_len
-                    else tts_pad_embed
-                )
-                eos_input_embed = (
-                    all_layer_embeds_sum[:, last_pos : last_pos + 1, :]
-                    + eos_text_hidden
-                )
-                codec_input_embeds_list.append(eos_input_embed)
+                    # Concatenate
+                    if codec_input_embeds_list:
+                        codec_input_embeds = torch.cat(
+                            codec_input_embeds_list, dim=1
+                        ).to(model_dtype)
+                        full_inputs_embeds = torch.cat(
+                            [talker_input_embed, codec_input_embeds], dim=1
+                        )
+                    else:
+                        full_inputs_embeds = talker_input_embed
 
-                # Concatenate
-                if codec_input_embeds_list:
-                    codec_input_embeds = torch.cat(
-                        codec_input_embeds_list, dim=1
-                    ).to(model_dtype)
-                    full_inputs_embeds = torch.cat(
-                        [talker_input_embed, codec_input_embeds], dim=1
+                    # Labels
+                    prefix_len = talker_input_embed.shape[1]
+                    labels_prefix = torch.full(
+                        (1, prefix_len - 1), -100, dtype=torch.long, device=device
                     )
-                else:
-                    full_inputs_embeds = talker_input_embed
+                    labels_code = layer0_codes.to(device)
+                    codec_eos_id = model.config.talker_config.codec_eos_token_id
+                    labels_eos = torch.tensor([[codec_eos_id]], device=device)
+                    labels = torch.cat([labels_prefix, labels_code, labels_eos], dim=1)
 
-                # Labels
-                prefix_len = talker_input_embed.shape[1]
-                labels_prefix = torch.full(
-                    (1, prefix_len - 1), -100, dtype=torch.long, device=device
-                )
-                labels_code = layer0_codes.to(device)
-                codec_eos_id = model.config.talker_config.codec_eos_token_id
-                labels_eos = torch.tensor([[codec_eos_id]], device=device)
-                labels = torch.cat([labels_prefix, labels_code, labels_eos], dim=1)
+                    # Attention mask
+                    seq_len = full_inputs_embeds.shape[1]
+                    attention_mask = torch.ones(
+                        (1, seq_len), dtype=torch.long, device=device
+                    )
 
-                # Attention mask
-                seq_len = full_inputs_embeds.shape[1]
-                attention_mask = torch.ones(
-                    (1, seq_len), dtype=torch.long, device=device
-                )
-
-                # Prefill
-                if (
-                    full_inputs_embeds is not None
-                    and full_inputs_embeds.shape[1] > 1
-                ):
-                    generation_step = -1
-                    residual_codes = None
-                if attention_mask is not None:
-                    delta0 = (1 - attention_mask).sum(dim=-1).unsqueeze(1)
-                    position_ids, rope_deltas = model.talker.get_rope_index(
-                        talker_input_ids,
-                        None,
-                        None,
+                    # Prefill
+                    if (
+                        full_inputs_embeds is not None
+                        and full_inputs_embeds.shape[1] > 1
+                    ):
+                        generation_step = -1
+                        residual_codes = None
+                    if attention_mask is not None:
+                        delta0 = (1 - attention_mask).sum(dim=-1).unsqueeze(1)
+                        position_ids, rope_deltas = model.talker.get_rope_index(
+                            talker_input_ids,
+                            None,
+                            None,
+                            attention_mask,
+                            None,
+                            None,
+                            None,
+                        )
+                        rope_deltas = rope_deltas - delta0
+                        model.talker.rope_deltas = rope_deltas
+                    return (
+                        full_inputs_embeds,
                         attention_mask,
-                        None,
-                        None,
-                        None,
+                        position_ids,
+                        labels,
+                        trailing_text_hidden,
+                        tts_pad_embed,
                     )
-                    rope_deltas = rope_deltas - delta0
-                    model.talker.rope_deltas = rope_deltas
 
+                (
+                    full_inputs_embeds,
+                    attention_mask,
+                    position_ids,
+                    labels,
+                    trailing_text_hidden,
+                    tts_pad_embed,
+                ) = prepare_talker_inputs(model, thinker_outputs)
                 outputs = model.talker.model(
+                    input_ids=None,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=None,
+                    inputs_embeds=full_inputs_embeds,
+                    use_cache=False,
+                    output_router_logits=None,
+                    cache_position=None,
+                    output_hidden_states=True,
+                )
+                (
+                    full_inputs_embeds,
+                    attention_mask,
+                    position_ids,
+                    labels,
+                    trailing_text_hidden,
+                    tts_pad_embed,
+                ) = prepare_talker_inputs(model.teacher.ori_m, thinker_outputs)
+                outputs_teacher = model.teacher.ori_m.talker.model(
                     input_ids=None,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
@@ -883,6 +924,8 @@ def fsdp_main(model, config):
                 )
                 hidden_states = outputs.last_hidden_state
                 logits = model.talker.codec_head(hidden_states)
+                hidden_states = outputs_teacher.last_hidden_state
+                ori_logits = model.teacher.ori_m.talker.codec_head(hidden_states)
                 # Forward Talker
                 # talker_outputs = model.talker(
                 #     inputs_embeds=full_inputs_embeds,
@@ -892,22 +935,58 @@ def fsdp_main(model, config):
                 #     output_hidden_states=True,
                 #     return_dict=True,
                 # )
-                hidden_states = (
-                    outputs.hidden_states,
-                    residual_codes,
-                )
+                # hidden_states = (
+                #     outputs.hidden_states,
+                #     residual_codes,
+                # )
 
                 # Compute Talker loss
-                talker_logits = logits
+                # talker_logits = logits
 
-                shift_logits = talker_logits[:, :, :].contiguous()
-                shift_labels = labels[:, :].contiguous()
+                # shift_logits = talker_logits[:, :, :].contiguous()
+                # shift_labels = labels[:, :].contiguous()
 
-                talker_loss = F.cross_entropy(
-                    shift_logits.view(-1, shift_logits.size(-1)),
-                    shift_labels.view(-1),
-                    ignore_index=-100,
-                )
+                if "kl_top" in loss_type:
+                    if loss_type == "kl_top":
+                        k = 1000
+                    else:
+                        k = int(loss_type.split("_")[-1])
+                    ori_logits = ori_logits * (labels != -100).unsqueeze(-1)
+                    logits = logits * (labels != -100).unsqueeze(-1)
+                    top_ori_logits, indices = ori_logits.topk(k, dim=-1, sorted=False)
+                    if getattr(args, "post_attn", False):
+                        ref = (
+                            F.softmax(ori_logits, dim=-1)
+                            .gather(-1, indices)
+                            .flatten(0, -2)
+                        )
+                        can = (
+                            F.log_softmax(logits, dim=-1)
+                            .gather(-1, indices)
+                            .flatten(0, -2)
+                        )
+                        talker_loss = (
+                            F.kl_div(can, ref, reduction="batchmean")
+                            * labels.numel()
+                            / (labels != -100).sum()
+                        )
+                    else:
+                        top_logits = logits.gather(-1, indices)
+                        talker_loss = (
+                            F.kl_div(
+                                F.log_softmax(top_logits, dim=-1).flatten(0, -2),
+                                F.softmax(top_ori_logits, dim=-1).flatten(0, -2),
+                                reduction="batchmean",
+                            )
+                            * labels.numel()
+                            / (labels != -100).sum()
+                        )
+                else:
+                    talker_loss = F.cross_entropy(
+                        logits.view(-1, logits.size(-1)),
+                        labels.view(-1),
+                        ignore_index=-100,
+                    )
 
                 # MTP Training (Layers 1-15)
                 # talker_hidden = (
@@ -963,7 +1042,7 @@ def fsdp_main(model, config):
                 # batch_mtp_loss += mtp_avg_loss
             avg_talker_loss = batch_talker_loss / batch_size_actual
             # avg_mtp_loss = batch_mtp_loss / batch_size_actual
-            return (avg_talker_loss ) #+ 2.0 * avg_mtp_loss)
+            return avg_talker_loss  # + 2.0 * avg_mtp_loss)
 
     trainer = TalkerTrainer(
         model=model_to_train,
@@ -979,14 +1058,19 @@ def fsdp_main(model, config):
         weight_tied_name_map=weight_tied_name_map,
         ignored_modules=[
             model_to_train.thinker.get_input_embeddings(),
+            model_to_train.teacher.ori_m.thinker.get_input_embeddings(),
             model_to_train.talker.get_input_embeddings(),
+            model_to_train.teacher.ori_m.talker.get_input_embeddings(),
             # model_to_train.talker.code_predictor.get_input_embeddings(),
             model_to_train.talker.codec_head,
+            model_to_train.teacher.ori_m.talker.codec_head,
             model_to_train.talker.code_predictor,
+            model_to_train.teacher.ori_m.talker.code_predictor,
             model_to_train.talker.text_projection,
+            model_to_train.teacher.ori_m.talker.text_projection,
             # model.talker.model,
             # model.thinker
-            ],
+        ],
     )
     with patch_model_thinker_emb(model_to_train):
         trainer.train()
@@ -1059,7 +1143,6 @@ def post_compression_talker(state, recipe_, model, processor):
                 if key.endswith("_scale") or key.endswith("_zero_point"):
                     delattr(module, key)
     print(f"Total quantized modules: {quantized_name_set}")
-    post_compression_talker(state, recipe_, model, processor)
 
     model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
     processor.save_pretrained(SAVE_DIR)

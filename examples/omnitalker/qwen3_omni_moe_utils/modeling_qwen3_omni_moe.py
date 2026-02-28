@@ -3123,8 +3123,9 @@ class Qwen3OmniMoeTalkerTextMLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
-        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-        return down_proj
+        with torch.autocast(device_type=x.device.type, dtype=torch.float32, enabled=True):
+            down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        return down_proj.to(x.dtype)
 
 
 class Qwen3OmniMoeTalkerTextSparseMoeBlock(nn.Module):
