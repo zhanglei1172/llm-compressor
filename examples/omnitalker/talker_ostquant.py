@@ -105,7 +105,7 @@ pretrain = "origin"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
 enable_modality = {"talker"}
-model_dtype = torch.float32
+model_dtype = torch.bfloat16
 jsonl_path = Path("/dataset/workspace/zhangl98/dataset/talker/processed/train.jsonl")
 MIMI_REPO_ID = "/dataset/workspace/zhangl98/models/mimi"
 NUM_CODE_GROUPS = 16
@@ -227,6 +227,35 @@ def patch_model_thinker_emb(model):
 def pre_trans_talker(model):
     # session = active_session()
     # session.reset()
+    # fix talker->mtp norm bug(model.talker.model.norm)
+    # norm_weight = model.talker.model.norm.weight.data.clone()
+    # for name in [
+    #     f"talker.code_predictor.model.codec_embedding.{i}"
+    #     for i in range(NUM_CODE_GROUPS - 1)
+    # ] + [
+    #     "talker.model.codec_embedding",
+    #     "talker.text_projection.linear_fc2",
+    #     "talker.hidden_projection.linear_fc2",
+    # ]:
+    #     module = model.get_submodule(name)
+    #     with torch.no_grad():
+    #         if isinstance(module, torch.nn.Linear):
+    #             module.weight.copy_(module.weight / norm_weight.view(-1, 1))
+    #             if module.bias is not None:
+    #                 module.bias.copy_(module.bias / norm_weight)
+    #         else:
+    #             module.weight.copy_(module.weight / norm_weight.view(1, -1))
+    # for name in [
+    #     "talker.code_predictor.model.layers.0.self_attn.q_proj",
+    #     "talker.model.layers.0.self_attn.q_proj",
+    #     "talker.code_predictor.model.layers.0.self_attn.k_proj",
+    #     "talker.model.layers.0.self_attn.k_proj",
+    #     "talker.code_predictor.model.layers.0.self_attn.v_proj",
+    #     "talker.model.layers.0.self_attn.v_proj",
+    # ]:
+    #     module = model.get_submodule(name)
+    #     with torch.no_grad():
+    #         module.weight.copy_(module.weight * norm_weight.view(1, -1))
     state = State()
     state.update(
         model=model.talker,
@@ -353,7 +382,7 @@ def pre_compression_talker(model):
                         r"re:^model.*v_proj$",
                         r"re:^model.*o_proj$",
                         r"re:^model.*out_proj$",
-                        # r"re:^model.*gate$",
+                        r"re:^model.*gate$",
                     ],
                     "ste": True,
                 },
@@ -742,6 +771,7 @@ def fsdp_main(model, config):
             audio_lengths = inputs["audio_lengths"]
             """Compute loss for a single sample in the batch"""
 
+            num_mtp_layers = NUM_CODE_GROUPS - 1
             # Forward Thinker (frozen)
             with torch.no_grad():
                 thinker_outputs = model.thinker(
@@ -758,7 +788,7 @@ def fsdp_main(model, config):
             # with FSDP.summon_full_params(model, writeback=True, recurse=False):
             for i in range(batch_size_actual):
                 # Build Talker prefix
-                def prepare_talker_inputs(model, thinker_outputs):
+                def prepare_model_outputs(model, thinker_outputs, norm_weight=None):
                     (
                         talker_input_embed,
                         talker_input_ids,
@@ -875,76 +905,86 @@ def fsdp_main(model, config):
                         )
                         rope_deltas = rope_deltas - delta0
                         model.talker.rope_deltas = rope_deltas
-                    return (
-                        full_inputs_embeds,
-                        attention_mask,
-                        position_ids,
-                        labels,
-                        trailing_text_hidden,
-                        tts_pad_embed,
+
+                    outputs = model.talker.model(
+                        input_ids=None,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        past_key_values=None,
+                        inputs_embeds=full_inputs_embeds,
+                        use_cache=False,
+                        output_router_logits=None,
+                        cache_position=None,
+                        output_hidden_states=True,
                     )
+                    hidden_states = outputs.last_hidden_state
+                    logits = model.talker.codec_head(hidden_states)
 
-                (
-                    full_inputs_embeds,
-                    attention_mask,
-                    position_ids,
-                    labels,
-                    trailing_text_hidden,
-                    tts_pad_embed,
-                ) = prepare_talker_inputs(model, thinker_outputs)
-                outputs = model.talker.model(
-                    input_ids=None,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=None,
-                    inputs_embeds=full_inputs_embeds,
-                    use_cache=False,
-                    output_router_logits=None,
-                    cache_position=None,
-                    output_hidden_states=True,
+                    # MTP Training (Layers 1-15)
+                    talker_hidden = outputs.hidden_states[-1]
+                    if norm_weight is not None:
+                        dtype = norm_weight.dtype
+                        R1 = model.talker.model.codec_embedding.R1_weight_output.weight.float()
+                        talker_hidden = outputs.hidden_states[-1] @ (
+                            (R1.T * norm_weight.float()) @ R1
+                        ).to(dtype)
+
+                        # talker_hidden = (
+                        #     (
+                        #         (talker_hidden.float() @ R1.T).to(dtype) * norm_weight
+                        #     ).float()
+                        #     @ R1
+                        # ).to(dtype)  # recover rmsnorm weight
+
+                    codec_hidden_start = prefix_len - 1
+                    codec_hidden_end = prefix_len - 1 + num_codec_tokens
+                    codec_hidden = talker_hidden[
+                        :, codec_hidden_start:codec_hidden_end, :
+                    ]
+
+                    code_predictor = model.talker.code_predictor
+                    hidden_dim = codec_hidden.shape[2]
+
+                    layer0_embed_for_mtp = model.talker.get_input_embeddings()(
+                        layer0_codes.to(device)
+                    )
+                    hidden_flat = codec_hidden.reshape(-1, 1, hidden_dim)
+                    layer0_flat = layer0_embed_for_mtp.reshape(-1, 1, hidden_dim)
+                    mtp_logits_list = []
+                    for mtp_layer_idx in range(num_mtp_layers):
+                        embed_list = [hidden_flat, layer0_flat]
+
+                        for prev_layer in range(mtp_layer_idx):
+                            prev_codes = sample_codes[:, prev_layer + 1, :].to(device)
+                            prev_embed = predictor_embeds[prev_layer](prev_codes)
+                            prev_embed_flat = prev_embed.reshape(-1, 1, hidden_dim)
+                            embed_list.append(prev_embed_flat)
+
+                        mtp_inputs = torch.cat(embed_list, dim=1).to(model_dtype)
+                        # target_layer_codes = sample_codes[:, mtp_layer_idx + 1, :].to(
+                        #     device
+                        # )
+
+                        mtp_outputs = code_predictor(
+                            inputs_embeds=mtp_inputs,
+                            generation_steps=mtp_layer_idx,
+                            use_cache=False,
+                        )
+
+                        mtp_logits = mtp_outputs.logits[:, -1, :]
+                        mtp_logits_list.append(mtp_logits)
+                    return logits, labels, mtp_logits_list
+
+                mtp_total_loss = 0.0
+
+                logits, labels, mtp_logits_list = prepare_model_outputs(
+                    model,
+                    thinker_outputs,
+                    norm_weight=model.teacher.ori_m.talker.model.norm.weight,
                 )
-                (
-                    full_inputs_embeds,
-                    attention_mask,
-                    position_ids,
-                    labels,
-                    trailing_text_hidden,
-                    tts_pad_embed,
-                ) = prepare_talker_inputs(model.teacher.ori_m, thinker_outputs)
-                outputs_teacher = model.teacher.ori_m.talker.model(
-                    input_ids=None,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=None,
-                    inputs_embeds=full_inputs_embeds,
-                    use_cache=False,
-                    output_router_logits=None,
-                    cache_position=None,
-                    output_hidden_states=True,
+                ori_logits, _, ori_mtp_logits_list = prepare_model_outputs(
+                    model.teacher.ori_m, thinker_outputs
                 )
-                hidden_states = outputs.last_hidden_state
-                logits = model.talker.codec_head(hidden_states)
-                hidden_states = outputs_teacher.last_hidden_state
-                ori_logits = model.teacher.ori_m.talker.codec_head(hidden_states)
-                # Forward Talker
-                # talker_outputs = model.talker(
-                #     inputs_embeds=full_inputs_embeds,
-                #     attention_mask=attention_mask,
-                #     trailing_text_hidden=trailing_text_hidden,
-                #     tts_pad_embed=tts_pad_embed,
-                #     output_hidden_states=True,
-                #     return_dict=True,
-                # )
-                # hidden_states = (
-                #     outputs.hidden_states,
-                #     residual_codes,
-                # )
-
-                # Compute Talker loss
-                # talker_logits = logits
-
-                # shift_logits = talker_logits[:, :, :].contiguous()
-                # shift_labels = labels[:, :].contiguous()
 
                 if "kl_top" in loss_type:
                     if loss_type == "kl_top":
@@ -954,95 +994,46 @@ def fsdp_main(model, config):
                     ori_logits = ori_logits * (labels != -100).unsqueeze(-1)
                     logits = logits * (labels != -100).unsqueeze(-1)
                     top_ori_logits, indices = ori_logits.topk(k, dim=-1, sorted=False)
-                    if getattr(args, "post_attn", False):
-                        ref = (
-                            F.softmax(ori_logits, dim=-1)
-                            .gather(-1, indices)
-                            .flatten(0, -2)
+                    top_logits = logits.gather(-1, indices)
+                    talker_loss = (
+                        F.kl_div(
+                            F.log_softmax(top_logits, dim=-1).flatten(0, -2),
+                            F.softmax(top_ori_logits, dim=-1).flatten(0, -2),
+                            reduction="batchmean",
                         )
-                        can = (
-                            F.log_softmax(logits, dim=-1)
-                            .gather(-1, indices)
-                            .flatten(0, -2)
-                        )
-                        talker_loss = (
-                            F.kl_div(can, ref, reduction="batchmean")
-                            * labels.numel()
-                            / (labels != -100).sum()
-                        )
-                    else:
-                        top_logits = logits.gather(-1, indices)
-                        talker_loss = (
-                            F.kl_div(
-                                F.log_softmax(top_logits, dim=-1).flatten(0, -2),
-                                F.softmax(top_ori_logits, dim=-1).flatten(0, -2),
-                                reduction="batchmean",
-                            )
-                            * labels.numel()
-                            / (labels != -100).sum()
-                        )
-                else:
-                    talker_loss = F.cross_entropy(
-                        logits.view(-1, logits.size(-1)),
-                        labels.view(-1),
-                        ignore_index=-100,
+                        * labels.numel()
+                        / (labels != -100).sum()
                     )
+                    for mtp_logits, ori_mtp_logits in zip(
+                        mtp_logits_list, ori_mtp_logits_list
+                    ):
+                        top_ori_mtp_logits, indices = ori_mtp_logits.topk(
+                            k, dim=-1, sorted=False
+                        )
+                        top_mtp_logits = mtp_logits.gather(-1, indices)
+                        mtp_layer_loss = F.kl_div(
+                            F.log_softmax(top_mtp_logits, dim=-1).flatten(0, -2),
+                            F.softmax(top_ori_mtp_logits, dim=-1).flatten(0, -2),
+                            reduction="batchmean",
+                        )
+                        mtp_total_loss += mtp_layer_loss
+                else:
+                    raise NotImplementedError(f"Loss type {loss_type} not implemented")
+                    # talker_loss = F.cross_entropy(
+                    #     logits.view(-1, logits.size(-1)),
+                    #     labels.view(-1),
+                    #     ignore_index=-100,
+                    # )
 
-                # MTP Training (Layers 1-15)
-                # talker_hidden = (
-                #     hidden_states[0][-1]
-                #     if isinstance(hidden_states, tuple)
-                #     else hidden_states[-1]
-                # )
+                # mtp_layer_loss = F.cross_entropy(mtp_logits, target_labels)
+                # mtp_total_loss += mtp_layer_loss
 
-                # codec_hidden_start = prefix_len - 1
-                # codec_hidden_end = prefix_len - 1 + num_codec_tokens
-                # codec_hidden = talker_hidden[
-                #     :, codec_hidden_start:codec_hidden_end, :
-                # ]
-
-                # mtp_total_loss = 0.0
-                # code_predictor = model.talker.code_predictor
-                # hidden_dim = codec_hidden.shape[2]
-                # num_mtp_layers = NUM_CODE_GROUPS - 1
-
-                # layer0_embed_for_mtp = model.talker.get_input_embeddings()(
-                #     layer0_codes.to(device)
-                # )
-                # hidden_flat = codec_hidden.reshape(-1, 1, hidden_dim)
-                # layer0_flat = layer0_embed_for_mtp.reshape(-1, 1, hidden_dim)
-
-                # for mtp_layer_idx in range(num_mtp_layers):
-                #     embed_list = [hidden_flat, layer0_flat]
-
-                #     for prev_layer in range(mtp_layer_idx):
-                #         prev_codes = sample_codes[:, prev_layer + 1, :].to(device)
-                #         prev_embed = predictor_embeds[prev_layer](prev_codes)
-                #         prev_embed_flat = prev_embed.reshape(-1, 1, hidden_dim)
-                #         embed_list.append(prev_embed_flat)
-
-                #     mtp_inputs = torch.cat(embed_list, dim=1).to(model_dtype)
-                #     target_layer_codes = sample_codes[:, mtp_layer_idx + 1, :].to(
-                #         device
-                #     )
-                #     target_labels = target_layer_codes.reshape(-1)
-
-                #     mtp_outputs = code_predictor(
-                #         inputs_embeds=mtp_inputs,
-                #         generation_steps=mtp_layer_idx,
-                #         use_cache=False,
-                #     )
-
-                #     mtp_logits = mtp_outputs.logits[:, -1, :]
-                #     mtp_layer_loss = F.cross_entropy(mtp_logits, target_labels)
-                #     mtp_total_loss += mtp_layer_loss
-
-                # mtp_avg_loss = mtp_total_loss / num_mtp_layers
+                mtp_avg_loss = mtp_total_loss / num_mtp_layers
                 batch_talker_loss += talker_loss
-                # batch_mtp_loss += mtp_avg_loss
+                batch_mtp_loss += mtp_avg_loss
             avg_talker_loss = batch_talker_loss / batch_size_actual
-            # avg_mtp_loss = batch_mtp_loss / batch_size_actual
-            return avg_talker_loss  # + 2.0 * avg_mtp_loss)
+            avg_mtp_loss = batch_mtp_loss / batch_size_actual
+            return avg_talker_loss + 2.0 * avg_mtp_loss
 
     trainer = TalkerTrainer(
         model=model_to_train,
@@ -1068,12 +1059,18 @@ def fsdp_main(model, config):
             model_to_train.teacher.ori_m.talker.code_predictor,
             model_to_train.talker.text_projection,
             model_to_train.teacher.ori_m.talker.text_projection,
+            model_to_train.talker.model.norm,
+            model_to_train.teacher.ori_m.talker.model.norm,
             # model.talker.model,
             # model.thinker
         ],
     )
     with patch_model_thinker_emb(model_to_train):
         trainer.train()
+    # R1 = model.talker.model.codec_embedding.R1_weight_output.weight.float()
+    # save_tensor = (
+    #     (R1.T * model_to_train.teacher.ori_m.talker.model.norm.weight.float()) @ R1
+    # ).to(model_dtype)
     dist.barrier()
     if hasattr(trainer.model, "_orig_mod"):
         unwrapped_model = trainer.model._orig_mod
@@ -1094,7 +1091,7 @@ def post_trans_talker(model):
 
 
 @torch.no_grad()
-def post_compression_talker(state, recipe_, model, processor):
+def post_compression_talker(state, recipe_, model, processor, additional_tensors={}):
     # recipe_[0].on_end(state=state, event=None)
     from collections import OrderedDict
 
@@ -1147,6 +1144,8 @@ def post_compression_talker(state, recipe_, model, processor):
     model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
     processor.save_pretrained(SAVE_DIR)
     torch.save(transform_state_dict, f"{SAVE_DIR}/transform_state_dict.pt")
+    if "save_norm_weight" in additional_tensors:
+        torch.save(additional_tensors["save_norm_weight"], f"{SAVE_DIR}/norm_weight.pt")
     print(SAVE_DIR)
 
 
@@ -1187,6 +1186,10 @@ if __name__ == "__main__":
     if RANK_OTHER:
         logger.remove()
     model, processor = dist_load_model(load_processor=True)
+    additional_tensors = {}
+    if not RANK_OTHER:
+        save_norm_weight = model.talker.model.norm.weight.float().cpu()
+        additional_tensors["save_norm_weight"] = save_norm_weight
     # dist.barrier()
     with patch_module_non_persistent_buffers(model):
         model.eval()
@@ -1202,5 +1205,11 @@ if __name__ == "__main__":
     if not RANK_OTHER:
         recipe_trans[0]._fold_transforms_into_weights(state_text.model)
 
-        post_compression_talker(state, recipe_, model, processor)
+        post_compression_talker(
+            state,
+            recipe_,
+            model,
+            processor,
+            additional_tensors=additional_tensors,
+        )
     cleanup()
