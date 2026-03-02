@@ -917,6 +917,7 @@ def fsdp_main(model, config):
                         cache_position=None,
                         output_hidden_states=True,
                     )
+                    model.talker.model._is_root = False
                     hidden_states = outputs.last_hidden_state
                     logits = model.talker.codec_head(hidden_states)
 

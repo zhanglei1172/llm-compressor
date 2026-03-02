@@ -544,7 +544,7 @@ def regist_hook(model, stat_tensors, weight_tied_name_map):
     return hooks
 
 
-def model_forward(model, inputs):
+def model_forward(model, inputs, norm_weight=None):
     device = torch.cuda.current_device()
     batch = inputs["batch"]
     target_codes = inputs["target_codes"]
@@ -722,6 +722,12 @@ def model_forward(model, inputs):
             if isinstance(hidden_states, tuple)
             else hidden_states[-1]
         )
+        if norm_weight is not None:
+            dtype = norm_weight.dtype
+            R1 = model.talker.model.codec_embedding.R1_weight_output.weight.float()
+            talker_hidden = talker_hidden @ (
+                (R1.T * norm_weight.float()) @ R1
+            ).to(dtype)
 
         codec_hidden_start = prefix_len - 1
         codec_hidden_end = prefix_len - 1 + num_codec_tokens
@@ -770,7 +776,7 @@ def model_forward(model, inputs):
     return None
 
 
-def inference_model(model):
+def inference_model(model, norm_weight=None):
     feature_extractor = AutoFeatureExtractor.from_pretrained(MIMI_REPO_ID)
     mimi_model = MimiModel.from_pretrained(MIMI_REPO_ID, torch_dtype=model_dtype).to(
         torch.cuda.current_device()
@@ -809,7 +815,7 @@ def inference_model(model):
     for batch in tqdm(dataloader):
         with torch.no_grad():
             # batch = {k: v.to('cuda') if torch.is_tensor(v) else v for k, v in batch.items()}
-            _ = model_forward(model, batch)
+            _ = model_forward(model, batch, norm_weight)
             # stat_tensors holds CPU tensors already; nothing to cast per-batch.
     remove_dispatch(model)
 
@@ -1006,6 +1012,7 @@ if __name__ == "__main__":
         # no_grad for compression
         for param in model.parameters():
             param.requires_grad = False
+        norm_weight = model.talker.model.norm.weight.data.clone()
         state, recipe_, model = pre_trans_talker(model)
 
         weight_tied_name_map = build_weight_tied_map_with_unionfind(
@@ -1014,7 +1021,7 @@ if __name__ == "__main__":
         # Map from weight_id -> {src_data_ptr: cpu_tensor}
         stat_tensors = defaultdict(dict)
         hooks = regist_hook(model, stat_tensors, weight_tied_name_map)
-        inference_model(model)
+        inference_model(model, norm_weight.cuda())
         model.cpu()
         # offload_model(model, "cuda:0", "cpu")
         MyTrainer.register_tied_parameters(model, weight_tied_name_map)
