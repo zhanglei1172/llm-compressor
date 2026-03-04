@@ -51,7 +51,7 @@ from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.modifiers.transform import SpinQuantModifier
 from llmcompressor.modifiers.transform.spinquant import mappings, norm_mappings
 from llmcompressor.pipelines.sequential.helpers import SequentialTracer
-from llmcompressor.train.fsdp_trainer import MyTrainer
+from llmcompressor.train.fsdp_trainer import MyTrainer, _force_fsdp_handle_idle
 from llmcompressor.train.train_utils import LLMCTrainingArguments, TeacherModel
 from llmcompressor.utils import helpers
 from llmcompressor.utils.pytorch.module import (
@@ -920,60 +920,60 @@ def fsdp_main(model, config):
                     model.talker.model._is_root = False
                     hidden_states = outputs.last_hidden_state
                     logits = model.talker.codec_head(hidden_states)
+                    mtp_logits_list = []
 
                     # MTP Training (Layers 1-15)
-                    talker_hidden = outputs.hidden_states[-1]
-                    if norm_weight is not None:
-                        dtype = norm_weight.dtype
-                        R1 = model.talker.model.codec_embedding.R1_weight_output.weight.float()
-                        talker_hidden = outputs.hidden_states[-1] @ (
-                            (R1.T * norm_weight.float()) @ R1
-                        ).to(dtype)
+                    # talker_hidden = outputs.hidden_states[-1]
+                    # if norm_weight is not None:
+                    #     dtype = norm_weight.dtype
+                    #     R1 = model.talker.model.codec_embedding.R1_weight_output.weight.float()
+                    #     talker_hidden = talker_hidden @ (
+                    #         (R1.T * norm_weight.float()) @ R1
+                    #     ).to(dtype)
 
-                        # talker_hidden = (
-                        #     (
-                        #         (talker_hidden.float() @ R1.T).to(dtype) * norm_weight
-                        #     ).float()
-                        #     @ R1
-                        # ).to(dtype)  # recover rmsnorm weight
+                    #     # talker_hidden = (
+                    #     #     (
+                    #     #         (talker_hidden.float() @ R1.T).to(dtype) * norm_weight
+                    #     #     ).float()
+                    #     #     @ R1
+                    #     # ).to(dtype)  # recover rmsnorm weight
 
-                    codec_hidden_start = prefix_len - 1
-                    codec_hidden_end = prefix_len - 1 + num_codec_tokens
-                    codec_hidden = talker_hidden[
-                        :, codec_hidden_start:codec_hidden_end, :
-                    ]
+                    # codec_hidden_start = prefix_len - 1
+                    # codec_hidden_end = prefix_len - 1 + num_codec_tokens
+                    # codec_hidden = talker_hidden[
+                    #     :, codec_hidden_start:codec_hidden_end, :
+                    # ]
 
-                    code_predictor = model.talker.code_predictor
-                    hidden_dim = codec_hidden.shape[2]
+                    # code_predictor = model.talker.code_predictor
+                    # hidden_dim = codec_hidden.shape[2]
 
-                    layer0_embed_for_mtp = model.talker.get_input_embeddings()(
-                        layer0_codes.to(device)
-                    )
-                    hidden_flat = codec_hidden.reshape(-1, 1, hidden_dim)
-                    layer0_flat = layer0_embed_for_mtp.reshape(-1, 1, hidden_dim)
-                    mtp_logits_list = []
-                    for mtp_layer_idx in range(num_mtp_layers):
-                        embed_list = [hidden_flat, layer0_flat]
+                    # layer0_embed_for_mtp = model.talker.get_input_embeddings()(
+                    #     layer0_codes.to(device)
+                    # )
+                    # hidden_flat = codec_hidden.reshape(-1, 1, hidden_dim)
+                    # layer0_flat = layer0_embed_for_mtp.reshape(-1, 1, hidden_dim)
+                    # for mtp_layer_idx in range(num_mtp_layers):
+                    #     embed_list = [hidden_flat, layer0_flat]
 
-                        for prev_layer in range(mtp_layer_idx):
-                            prev_codes = sample_codes[:, prev_layer + 1, :].to(device)
-                            prev_embed = predictor_embeds[prev_layer](prev_codes)
-                            prev_embed_flat = prev_embed.reshape(-1, 1, hidden_dim)
-                            embed_list.append(prev_embed_flat)
+                    #     for prev_layer in range(mtp_layer_idx):
+                    #         prev_codes = sample_codes[:, prev_layer + 1, :].to(device)
+                    #         prev_embed = predictor_embeds[prev_layer](prev_codes)
+                    #         prev_embed_flat = prev_embed.reshape(-1, 1, hidden_dim)
+                    #         embed_list.append(prev_embed_flat)
 
-                        mtp_inputs = torch.cat(embed_list, dim=1).to(model_dtype)
-                        # target_layer_codes = sample_codes[:, mtp_layer_idx + 1, :].to(
-                        #     device
-                        # )
+                    #     mtp_inputs = torch.cat(embed_list, dim=1).to(model_dtype)
+                    #     # target_layer_codes = sample_codes[:, mtp_layer_idx + 1, :].to(
+                    #     #     device
+                    #     # )
 
-                        mtp_outputs = code_predictor(
-                            inputs_embeds=mtp_inputs,
-                            generation_steps=mtp_layer_idx,
-                            use_cache=False,
-                        )
+                    #     mtp_outputs = code_predictor(
+                    #         inputs_embeds=mtp_inputs,
+                    #         generation_steps=mtp_layer_idx,
+                    #         use_cache=False,
+                    #     )
 
-                        mtp_logits = mtp_outputs.logits[:, -1, :]
-                        mtp_logits_list.append(mtp_logits)
+                    #     mtp_logits = mtp_outputs.logits[:, -1, :]
+                    #     mtp_logits_list.append(mtp_logits)
                     return logits, labels, mtp_logits_list
 
                 mtp_total_loss = 0.0
@@ -1005,19 +1005,19 @@ def fsdp_main(model, config):
                         * labels.numel()
                         / (labels != -100).sum()
                     )
-                    for mtp_logits, ori_mtp_logits in zip(
-                        mtp_logits_list, ori_mtp_logits_list
-                    ):
-                        top_ori_mtp_logits, indices = ori_mtp_logits.topk(
-                            k, dim=-1, sorted=False
-                        )
-                        top_mtp_logits = mtp_logits.gather(-1, indices)
-                        mtp_layer_loss = F.kl_div(
-                            F.log_softmax(top_mtp_logits, dim=-1).flatten(0, -2),
-                            F.softmax(top_ori_mtp_logits, dim=-1).flatten(0, -2),
-                            reduction="batchmean",
-                        )
-                        mtp_total_loss += mtp_layer_loss
+                    # for mtp_logits, ori_mtp_logits in zip(
+                    #     mtp_logits_list, ori_mtp_logits_list
+                    # ):
+                    #     top_ori_mtp_logits, indices = ori_mtp_logits.topk(
+                    #         k, dim=-1, sorted=False
+                    #     )
+                    #     top_mtp_logits = mtp_logits.gather(-1, indices)
+                    #     mtp_layer_loss = F.kl_div(
+                    #         F.log_softmax(top_mtp_logits, dim=-1).flatten(0, -2),
+                    #         F.softmax(top_ori_mtp_logits, dim=-1).flatten(0, -2),
+                    #         reduction="batchmean",
+                    #     )
+                    #     mtp_total_loss += mtp_layer_loss
                 else:
                     raise NotImplementedError(f"Loss type {loss_type} not implemented")
                     # talker_loss = F.cross_entropy(
@@ -1029,12 +1029,12 @@ def fsdp_main(model, config):
                 # mtp_layer_loss = F.cross_entropy(mtp_logits, target_labels)
                 # mtp_total_loss += mtp_layer_loss
 
-                mtp_avg_loss = mtp_total_loss / num_mtp_layers
+                # mtp_avg_loss = mtp_total_loss / num_mtp_layers
                 batch_talker_loss += talker_loss
-                batch_mtp_loss += mtp_avg_loss
+                # batch_mtp_loss += mtp_avg_loss
             avg_talker_loss = batch_talker_loss / batch_size_actual
-            avg_mtp_loss = batch_mtp_loss / batch_size_actual
-            return avg_talker_loss + 2.0 * avg_mtp_loss
+            # avg_mtp_loss = batch_mtp_loss / batch_size_actual
+            return avg_talker_loss #+ 2.0 * avg_mtp_loss
 
     trainer = TalkerTrainer(
         model=model_to_train,
@@ -1073,6 +1073,7 @@ def fsdp_main(model, config):
     #     (R1.T * model_to_train.teacher.ori_m.talker.model.norm.weight.float()) @ R1
     # ).to(model_dtype)
     dist.barrier()
+    _force_fsdp_handle_idle(trainer.model)
     if hasattr(trainer.model, "_orig_mod"):
         unwrapped_model = trainer.model._orig_mod
     else:

@@ -52,6 +52,22 @@ model_dtype = model.dtype
 model_device = torch.device("cuda")
 processor = AutoProcessor.from_pretrained(REF_MODEL_ID, trust_remote_code=True)
 
+R1 = (
+    torch.load(
+        f"{MODEL_ID}/transform_state_dict.pt",
+        map_location="cpu",
+    )["talker.model.layers.0.self_attn.q_proj.R1_weight_input"]["weight"]
+    .detach()
+    .to(model_device)
+)
+norm_weight = (
+    torch.load(
+        f"{MODEL_ID}/norm_weight.pt",
+        map_location="cpu",
+    )
+    .detach()
+    .to(model_device)
+)
 
 # Select calibration dataset.
 DATASET_ID = "/dataset/workspace/zhangl98/dataset/peoples_speech/test"
@@ -370,7 +386,7 @@ def flatten_obj(obj):
 # helpers.patch_attr(model.thinker.audio_tower, "forward", audio_forward))
 
 
-def model_forward(model, inputs):
+def model_forward(model, inputs, norm_weight=None):
     device = torch.cuda.current_device()
     batch = inputs["batch"]
     target_codes = inputs["target_codes"]
@@ -548,6 +564,11 @@ def model_forward(model, inputs):
             if isinstance(hidden_states, tuple)
             else hidden_states[-1]
         )
+        if norm_weight is not None:
+            dtype = norm_weight.dtype
+            talker_hidden = talker_hidden @ ((R1.T * norm_weight.float()) @ R1).to(
+                dtype
+            )
 
         codec_hidden_start = prefix_len - 1
         codec_hidden_end = prefix_len - 1 + num_codec_tokens
@@ -653,7 +674,7 @@ with contextlib.ExitStack() as stack:
     _ref_rets = []
     for inputs in tqdm(dataloader):
         dispatch_for_generation(model, extra_memory=10 * 256 * 2048 * 2)
-        ret = flatten_obj(model_forward(model, inputs))
+        ret = flatten_obj(model_forward(model, inputs, norm_weight=norm_weight))
         _rets.append([x.cpu() for x in ret])
     rets = []
     for ret in zip(*_rets):
