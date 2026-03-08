@@ -18,7 +18,11 @@ import torch.nn.functional as F
 import yaml
 from accelerate import init_empty_weights
 from accelerate.hooks import remove_hook_from_module
-from compressed_tensors import get_execution_device, match_modules_set
+from compressed_tensors import (
+    get_execution_device,
+    match_modules_set,
+    register_offload_module,
+)
 from compressed_tensors.quantization import (
     enable_quantization,
 )
@@ -403,7 +407,8 @@ def pre_trans_talker(model):
                 k_proj.out_features // 2, is_out=True, inverse=True, is_qk=True
             ).to(torch.cuda.current_device())
             S3_transform_inv.scale = S3_transform.scale
-
+            register_offload_module(v_proj, "S2_transform", S2_transform)
+            register_offload_module(o_proj, "S2_transform_inv", S2_transform_inv)
             with (
                 align_module_device(q_proj),
                 align_module_device(k_proj),
@@ -416,6 +421,8 @@ def pre_trans_talker(model):
                 register_smooth_transform(o_proj, S2_transform_inv)
 
             for up_proj, down_proj in zip(up_projs, down_projs):
+                register_offload_module(up_proj, "S4_transform", S4_transform)
+                register_offload_module(down_proj, "S4_transform_inv", S4_transform_inv)
                 S4_transform = SmoothTransform(up_proj.out_features, is_out=True).to(
                     torch.cuda.current_device()
                 )
@@ -470,6 +477,8 @@ def pre_trans_talker(model):
                 attn_norm.weight.shape[0], is_out=True, inverse=True
             ).to(torch.cuda.current_device())
             S1_transform_inv.scale = S1_transform.scale
+            register_offload_module(attn_norm, "S1_transform_inv", S1_transform_inv)
+            register_offload_module(q_proj, "S1_transform", S1_transform)
             with (
                 torch.no_grad(),
                 align_module_device(attn_norm),
@@ -488,6 +497,8 @@ def pre_trans_talker(model):
                 mlp_norm.weight.shape[0], is_out=True, inverse=True
             ).to(torch.cuda.current_device())
             S1_transform_inv.scale = S1_transform.scale
+            register_offload_module(mlp_norm, "S1_transform_inv", S1_transform_inv)
+            register_offload_module(mlp_norm, "S1_transform", S1_transform)
             with (
                 torch.no_grad(),
                 align_module_device(mlp_norm),
