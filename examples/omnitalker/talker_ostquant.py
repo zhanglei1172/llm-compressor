@@ -231,7 +231,7 @@ def patch_model_thinker_emb(model):
 class SmoothTransform(TransformBase):
     def __init__(self, dim, inverse=False, is_out=True, is_qk=False, head_dim=-1):
         super().__init__()
-        self.scale = torch.nn.Parameter(torch.ones(dim) * 1.0)
+        self.scale = torch.nn.Parameter(torch.ones(dim))
         self.inverse = inverse
         self.is_out = is_out
         self.is_qk = is_qk
@@ -246,6 +246,12 @@ class SmoothTransform(TransformBase):
             scale = scale.reshape(1, -1).repeat([1, 2]).reshape(-1)
         if self.is_out and x.dim() > 1:
             scale = scale.view(-1, 1)
+            if self.head_dim != -1:
+                scale = torch.repeat_interleave(
+                    scale.view(1, -1, self.head_dim),
+                    dim=0,
+                    repeats=x.shape[0] // scale.numel(),
+                ).view(-1, 1)
         elif self.head_dim != -1:  # S2 for O_proj
             scale = scale.view(1, -1, self.head_dim)
             scale = torch.repeat_interleave(
@@ -255,6 +261,9 @@ class SmoothTransform(TransformBase):
 
     def right_inverse(self, x):
         return self.forward(x, inverse=True)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(inverse={self.inverse})"
 
 
 def get_module_name(model, module):
