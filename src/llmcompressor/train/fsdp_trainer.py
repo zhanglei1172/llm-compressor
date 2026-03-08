@@ -32,6 +32,43 @@ def pt_fsdp_state_dict(model: torch.nn.Module):
         return model.state_dict()
 
 
+def _reset_fsdp_is_root(module: nn.Module):
+    """Recursively reset _is_root to False for all FSDP instances in the module tree.
+
+    When non-root FSDP submodules are called directly (not via the root FSDP forward),
+    their _lazy_init sets _is_root=True. This causes an assertion error when the root
+    FSDP later runs _lazy_init during clip_grad_norm_. This helper resets all such
+    instances so the root can initialize properly.
+    """
+    for m in module.modules():
+        if isinstance(m, PT_FSDP) and getattr(m, '_is_root', None) is True:
+            m._is_root = False
+
+
+def _force_fsdp_handle_idle(module: nn.Module):
+    """Best-effort reset for FSDP handle training states before state_dict export."""
+    for m in module.modules():
+        if not isinstance(m, PT_FSDP):
+            continue
+
+        handles = []
+        handle = getattr(m, "_handle", None)
+        if handle is not None:
+            handles.append(handle)
+
+        for h in getattr(m, "_handles", []) or []:
+            if h is not None:
+                handles.append(h)
+
+        for h in handles:
+            training_state = getattr(h, "_training_state", None)
+            if training_state is None:
+                continue
+            state_enum = type(training_state)
+            if hasattr(state_enum, "IDLE"):
+                h._training_state = state_enum.IDLE
+
+
 class MyTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         teacher_model = kwargs.pop("teacher_model", None)

@@ -448,7 +448,7 @@ def build_talker_prefix_tts(
 
 
 @torch.no_grad()
-def post_compression_talker(model, processor):
+def post_compression_talker(model, processor, additional_tensors={}):
     # recipe_[0].on_end(state=state, event=None)
     from collections import OrderedDict
 
@@ -475,6 +475,7 @@ def post_compression_talker(model, processor):
     model.save_pretrained(SAVE_DIR)  # , save_compressed=True) # fakequant
     processor.save_pretrained(SAVE_DIR)
     torch.save(transform_state_dict, f"{SAVE_DIR}/transform_state_dict.pt")
+    torch.save(additional_tensors["save_norm_weight"], f"{SAVE_DIR}/norm_weight.pt")
     print(SAVE_DIR)
 
 
@@ -725,9 +726,9 @@ def model_forward(model, inputs, norm_weight=None):
         if norm_weight is not None:
             dtype = norm_weight.dtype
             R1 = model.talker.model.codec_embedding.R1_weight_output.weight.float()
-            talker_hidden = talker_hidden @ (
-                (R1.T * norm_weight.float()) @ R1
-            ).to(dtype)
+            talker_hidden = talker_hidden @ ((R1.T * norm_weight.float()) @ R1).to(
+                dtype
+            )
 
         codec_hidden_start = prefix_len - 1
         codec_hidden_end = prefix_len - 1 + num_codec_tokens
@@ -1013,6 +1014,7 @@ if __name__ == "__main__":
         for param in model.parameters():
             param.requires_grad = False
         norm_weight = model.talker.model.norm.weight.data.clone()
+        additional_tensors = {"save_norm_weight": norm_weight}
         state, recipe_, model = pre_trans_talker(model)
 
         weight_tied_name_map = build_weight_tied_map_with_unionfind(
@@ -1058,4 +1060,4 @@ if __name__ == "__main__":
         if "talker" in enable_modality:
             recipe_[0]._fold_transforms_into_weights(state.model)
 
-    post_compression_talker(model, processor)
+    post_compression_talker(model, processor, additional_tensors=additional_tensors)
