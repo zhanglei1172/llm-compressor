@@ -22,6 +22,10 @@ from compressed_tensors import get_execution_device, match_modules_set
 from compressed_tensors.quantization import (
     enable_quantization,
 )
+from compressed_tensors.transform import (
+    TransformBase,
+    apply_transform_config,
+)
 from easydict import EasyDict
 from loguru import logger
 from qwen_omni_utils import process_mm_info
@@ -58,6 +62,7 @@ from llmcompressor.utils.pytorch.module import (
     build_weight_tied_map_with_unionfind,
     patch_module_non_persistent_buffers,
 )
+from llmcompressor.utils.transformers import untie_word_embeddings
 
 torch.fx.experimental._config.meta_nonzero_assume_all_nonzero = True
 USE_AUDIO_IN_VIDEO = True
@@ -75,7 +80,7 @@ mappings.SPINQUANT_MAPPING_REGISTRY["Qwen3OmniMoeTalkerForConditionalGeneration"
         attn_k="re:.*model.*k_proj$",
         attn_v="re:.*model.*v_proj$",
         attn_o="re:.*model.*o_proj$",
-        mlp_in=[r"re:.*up_proj", r"re:.*mlp.*gate.*"],
+        mlp_in=[r"re:.*up_proj$", r"re:.*mlp.*(gate|gate_proj)$"],
         mlp_out=[r"re:.*mlp.*down_proj$"],
         lm_head=r"re:.*(lm_head\.\d+|codec_head)$",
     )  # 2+16emb + 16head + (4*20+4*5)qkvo + 129*20+5 u + 131*20+5 g + (129)*20 + 5 d
@@ -87,7 +92,7 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeTalkerForConditionalGeneration"
     ),
     norm_mappings.NormMapping(
         norm="re:.*model.*post_attention_layernorm$",
-        linears=[r"re:.*mlp.*gate.*", r"re:.*mlp.*up_proj"],
+        linears=[r"re:.*mlp.*(gate|gate_proj)$", r"re:.*mlp.*up_proj$"],
     ),
     norm_mappings.NormMapping(
         norm=r"re:.*model\.norm",
@@ -100,7 +105,7 @@ norm_mappings.NORM_MAPPING_REGISTRY["Qwen3OmniMoeTalkerForConditionalGeneration"
 
 #################### configurations ####################
 # Select model and load it.
-ENABLE_SMOOTH = False
+ENABLE_SMOOTH = True
 pretrain = "origin"
 flag = "spinquant"
 NUM_CALIBRATION_SAMPLES = 150 * 2 * 4 + 16
@@ -223,6 +228,45 @@ def patch_model_thinker_emb(model):
     del model.talker.thinker_embeddings
 
 
+class SmoothTransform(TransformBase):
+    def __init__(self, dim, inverse=False, is_out=True, is_qk=False, head_dim=-1):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.ones(dim) * 1.0)
+        self.inverse = inverse
+        self.is_out = is_out
+        self.is_qk = is_qk
+        self.head_dim = head_dim  # only for OV
+
+    def forward(self, x, inverse=False):
+        if inverse ^ self.inverse:
+            scale = 1 / self.scale.to(x.device)
+        else:
+            scale = self.scale.to(x.device)
+        if self.is_qk:  # S3 for q_proj and K_proj
+            scale = scale.reshape(1, -1).repeat([1, 2]).reshape(-1)
+        if self.is_out and x.dim() > 1:
+            scale = scale.view(-1, 1)
+        elif self.head_dim != -1:  # S2 for O_proj
+            scale = scale.view(1, -1, self.head_dim)
+            scale = torch.repeat_interleave(
+                scale, dim=1, repeats=x.shape[1] // scale.numel()
+            ).flatten(start_dim=0)
+        return (x.to(self.scale.dtype) * scale).to(x.dtype)
+
+    def right_inverse(self, x):
+        return self.forward(x, inverse=True)
+
+
+def get_module_name(model, module):
+    """
+    Get the name of the module in the model.
+    """
+    for name, mod in model.named_modules():
+        if mod is module:
+            return name
+    return None
+
+
 @torch.no_grad()
 def pre_trans_talker(model):
     # session = active_session()
@@ -279,25 +323,18 @@ def pre_trans_talker(model):
             mod.on_initialize(state=state)
         # for param in model.talker.model.parameters():
         #     param.requires_grad = False
-        recipe_[0].on_start(state=state, event=None)
+        # recipe_[0].on_start(state=state, event=None)
+        recipe_[0].started_ = True
 
-    class SmoothTransform(torch.nn.Module):
-        def __init__(self, dim, trans=False):
-            super().__init__()
-            self.scale = torch.nn.Parameter(torch.ones(dim) * 1.0)
-            self.trans = trans
+        # untie embeddings to avoid unintended effects of `_center_embeddings`
+        untie_word_embeddings(state.model)
 
-        def forward(self, x, inverse=False):
-            if inverse:
-                scale = 1 / self.scale.to(x.device)
-            else:
-                scale = self.scale.to(x.device)
-            if not self.trans and x.dim() > 1:
-                scale = scale.view(-1, 1)
-            return (x.to(self.scale.dtype) * scale).to(x.dtype)
-
-        def right_inverse(self, x):
-            return self.forward(x, inverse=True)
+        # needs to happen after the model has been hooked to execute on the GPU
+        # otherwise we're applying weight transforms on CPU
+        if recipe_[0].backe_mean:
+            recipe_[0]._center_embeddings(state.model)
+            recipe_[0]._bake_mean_into_fc(state.model)
+        recipe_[0]._fuse_norms(state.model)
 
     if ENABLE_SMOOTH:
         import torch.nn.utils.parametrize as P
@@ -307,41 +344,150 @@ def pre_trans_talker(model):
         )
         from torch.nn.utils.parametrize import is_parametrized
 
-        for up_projs, down_projs in match_modules_set(
-            model.talker, (r"re:.*up_proj$", r"re:.*down_proj$")
+        def register_smooth_transform(module, transform):
+            if not is_parametrized(module, "weight"):
+                update_offload_parameter(module, "weight", transform(module.weight))
+            P.register_parametrization(module, "weight", transform)
+            if transform.is_out and hasattr(module, "bias") and module.bias is not None:
+                if not is_parametrized(module, "bias"):
+                    update_offload_parameter(module, "bias", transform(module.bias))
+                P.register_parametrization(module, "bias", transform)
+
+        for (
+            q_projs,
+            k_projs,
+            v_projs,
+            o_projs,
+            up_projs,
+            down_projs,
+        ) in match_modules_set(
+            state.model,
+            (
+                r"re:.*q_proj$",
+                r"re:.*k_proj$",
+                r"re:.*v_proj$",
+                r"re:.*o_proj$",
+                r"re:.*up_proj$",
+                r"re:.*down_proj$",
+            ),
         ):
-            assert len(up_projs) == 1
-            assert len(down_projs) == 1
-            up_proj = up_projs[0]
-            down_proj = down_projs[0]
-            transform = SmoothTransform(up_proj.out_features).to(
+            assert len(q_projs) == len(k_projs) == len(v_projs) == len(o_projs) == 1
+            q_proj = q_projs[0]
+            k_proj = k_projs[0]
+            v_proj = v_projs[0]
+            o_proj = o_projs[0]
+            attn_module_name = get_module_name(state.model, o_proj).rsplit(".", 1)[0]
+            attn_module = state.model.get_submodule(attn_module_name)
+            head_dim = attn_module.head_dim
+            assert o_proj.in_features % v_proj.out_features == 0
+            S2_transform = SmoothTransform(
+                v_proj.out_features, is_out=True, head_dim=head_dim
+            ).to(torch.cuda.current_device())
+            S2_transform_inv = SmoothTransform(
+                v_proj.out_features, is_out=False, inverse=True, head_dim=head_dim
+            ).to(torch.cuda.current_device())
+            S2_transform_inv.scale = S2_transform.scale
+            S3_transform = SmoothTransform(
+                k_proj.out_features // 2, is_out=True, is_qk=True
+            ).to(torch.cuda.current_device())
+            S3_transform_inv = SmoothTransform(
+                k_proj.out_features // 2, is_out=True, inverse=True, is_qk=True
+            ).to(torch.cuda.current_device())
+            S3_transform_inv.scale = S3_transform.scale
+
+            with (
+                align_module_device(q_proj),
+                align_module_device(k_proj),
+                align_module_device(v_proj),
+                align_module_device(o_proj),
+            ):
+                # register_smooth_transform(q_proj, S3_transform)
+                # register_smooth_transform(k_proj, S3_transform_inv)
+                register_smooth_transform(v_proj, S2_transform)
+                register_smooth_transform(o_proj, S2_transform_inv)
+
+            for up_proj, down_proj in zip(up_projs, down_projs):
+                S4_transform = SmoothTransform(up_proj.out_features, is_out=True).to(
+                    torch.cuda.current_device()
+                )
+                S4_transform_inv = SmoothTransform(
+                    down_proj.in_features, is_out=False, inverse=True
+                ).to(torch.cuda.current_device())
+                S4_transform_inv.scale = S4_transform.scale
+                with align_module_device(up_proj), align_module_device(down_proj):
+                    register_smooth_transform(up_proj, S4_transform)
+                    register_smooth_transform(down_proj, S4_transform_inv)
+
+        apply_transform_config(state.model, recipe_[0].transform_config)
+
+    if ENABLE_SMOOTH:
+        for (
+            attn_norms,
+            q_projs,
+            k_projs,
+            v_projs,
+            mlp_norms,
+            gates,
+            ups,
+        ) in match_modules_set(
+            state.model,
+            (
+                r"re:.*model.*input_layernorm",
+                r"re:.*model.*q_proj$",
+                r"re:.*model.*k_proj$",
+                r"re:.*model.*v_proj$",
+                r"re:.*model.*post_attention_layernorm$",
+                r"re:.*mlp.*(gate|gate_proj)$",
+                r"re:.*mlp.*up_proj$",
+            ),
+        ):
+            assert (
+                len(attn_norms)
+                == len(q_projs)
+                == len(k_projs)
+                == len(v_projs)
+                == len(mlp_norms)
+                == 1
+            )
+            attn_norm = attn_norms[0]
+            q_proj = q_projs[0]
+            k_proj = k_projs[0]
+            v_proj = v_projs[0]
+            mlp_norm = mlp_norms[0]
+            S1_transform = SmoothTransform(attn_norm.weight.shape[0], is_out=False).to(
                 torch.cuda.current_device()
             )
-            transform_inv = SmoothTransform(down_proj.in_features, trans=True).to(
-                torch.cuda.current_device()
-            )
-            transform_inv.scale = transform.scale
+            S1_transform_inv = SmoothTransform(
+                attn_norm.weight.shape[0], is_out=True, inverse=True
+            ).to(torch.cuda.current_device())
+            S1_transform_inv.scale = S1_transform.scale
             with (
                 torch.no_grad(),
-                align_module_device(up_proj),
-                align_module_device(down_proj),
+                align_module_device(attn_norm),
+                align_module_device(q_proj),
+                align_module_device(k_proj),
+                align_module_device(v_proj),
             ):
-                if not is_parametrized(up_proj, "weight"):
-                    update_offload_parameter(
-                        up_proj, "weight", transform(up_proj.weight)
-                    )
-                P.register_parametrization(up_proj, "weight", transform)
-                if hasattr(up_proj, "bias") and up_proj.bias is not None:
-                    if not is_parametrized(up_proj, "bias"):
-                        update_offload_parameter(
-                            up_proj, "bias", transform(up_proj.bias)
-                        )
-                    P.register_parametrization(up_proj, "bias", transform)
-                if not is_parametrized(down_proj, "weight"):
-                    update_offload_parameter(
-                        down_proj, "weight", transform_inv(down_proj.weight)
-                    )
-                P.register_parametrization(down_proj, "weight", transform_inv)
+                register_smooth_transform(attn_norm, S1_transform_inv)
+                register_smooth_transform(q_proj, S1_transform)
+                register_smooth_transform(k_proj, S1_transform)
+                register_smooth_transform(v_proj, S1_transform)
+            S1_transform = SmoothTransform(mlp_norm.weight.shape[0], is_out=False).to(
+                torch.cuda.current_device()
+            )
+            S1_transform_inv = SmoothTransform(
+                mlp_norm.weight.shape[0], is_out=True, inverse=True
+            ).to(torch.cuda.current_device())
+            S1_transform_inv.scale = S1_transform.scale
+            with (
+                torch.no_grad(),
+                align_module_device(mlp_norm),
+            ):
+                register_smooth_transform(mlp_norm, S1_transform_inv)
+            with torch.no_grad():
+                for module in gates + ups:
+                    with align_module_device(module):
+                        register_smooth_transform(module, S1_transform)
 
     return state, recipe_, model
 
@@ -1034,7 +1180,7 @@ def fsdp_main(model, config):
                 # batch_mtp_loss += mtp_avg_loss
             avg_talker_loss = batch_talker_loss / batch_size_actual
             # avg_mtp_loss = batch_mtp_loss / batch_size_actual
-            return avg_talker_loss #+ 2.0 * avg_mtp_loss
+            return avg_talker_loss  # + 2.0 * avg_mtp_loss
 
     trainer = TalkerTrainer(
         model=model_to_train,
