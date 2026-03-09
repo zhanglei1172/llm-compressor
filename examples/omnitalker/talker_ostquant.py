@@ -1269,6 +1269,9 @@ def post_compression_talker(state, recipe_, model, processor, additional_tensors
 
     for name, module in model.talker.named_modules():
         if isinstance(module, TransformBase):
+            if not hasattr(module, "scheme"):
+                transform_state_dict.update({name: module.state_dict()})
+                continue
             if module in _h or id(module.scheme) in _h:
                 continue
             _h.add((module if module.scheme.block_wise else id(module.scheme)))
