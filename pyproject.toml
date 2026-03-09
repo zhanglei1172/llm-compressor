@@ -30,7 +30,7 @@ tmp_path_retention_policy = "failed"
 no-build-isolation-package = ['flash-attn']
 
 [tool.uv.sources]
-compressed-tensors = { git = "git+https://git@github.com/zhanglei1172/compressed-tensors.git", rev = "lz_exp" }
+compressed-tensors = { git = "git+https://git@github.com/zhanglei1172/compressed-tensors.git", rev = "48fd9c3909227677f7998a83b6cf2cc3acf3489f" }
 
 [dependency-groups]
 dev = [
