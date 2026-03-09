@@ -421,8 +421,6 @@ def pre_trans_talker(model):
                 register_smooth_transform(o_proj, S2_transform_inv)
 
             for up_proj, down_proj in zip(up_projs, down_projs):
-                register_offload_module(up_proj, "S4_transform", S4_transform)
-                register_offload_module(down_proj, "S4_transform_inv", S4_transform_inv)
                 S4_transform = SmoothTransform(up_proj.out_features, is_out=True).to(
                     torch.cuda.current_device()
                 )
@@ -430,6 +428,8 @@ def pre_trans_talker(model):
                     down_proj.in_features, is_out=False, inverse=True
                 ).to(torch.cuda.current_device())
                 S4_transform_inv.scale = S4_transform.scale
+                register_offload_module(up_proj, "S4_transform", S4_transform)
+                register_offload_module(down_proj, "S4_transform_inv", S4_transform_inv)
                 with align_module_device(up_proj), align_module_device(down_proj):
                     register_smooth_transform(up_proj, S4_transform)
                     register_smooth_transform(down_proj, S4_transform_inv)
@@ -496,18 +496,18 @@ def pre_trans_talker(model):
             S1_transform_inv = SmoothTransform(
                 mlp_norm.weight.shape[0], is_out=True, inverse=True
             ).to(torch.cuda.current_device())
-            S1_transform_inv.scale = S1_transform.scale
-            register_offload_module(mlp_norm, "S1_transform_inv", S1_transform_inv)
-            register_offload_module(mlp_norm, "S1_transform", S1_transform)
-            with (
-                torch.no_grad(),
-                align_module_device(mlp_norm),
-            ):
-                register_smooth_transform(mlp_norm, S1_transform_inv)
-            with torch.no_grad():
-                for module in gates + ups:
-                    with align_module_device(module):
-                        register_smooth_transform(module, S1_transform)
+            # S1_transform_inv.scale = S1_transform.scale
+            # register_offload_module(mlp_norm, "S1_transform_inv", S1_transform_inv)
+            # register_offload_module(mlp_norm, "S1_transform", S1_transform)
+            # with (
+            #     torch.no_grad(),
+            #     align_module_device(mlp_norm),
+            # ):
+            #     register_smooth_transform(mlp_norm, S1_transform_inv)
+            # with torch.no_grad():
+            #     for module in gates + ups:
+            #         with align_module_device(module):
+            #             register_smooth_transform(module, S1_transform)
 
     return state, recipe_, model
 
